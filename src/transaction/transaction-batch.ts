@@ -404,6 +404,7 @@ export class TransactionBatch {
       if (changeOutput) {
         outputTypes.push(OutputType.Change);
       }
+
       return {
         transaction,
         outputTypes,
@@ -427,9 +428,31 @@ export class TransactionBatch {
       data: '0x', // TODO-V3: Add RelayAdapt encoded calldata
     };
 
-    for (let index = 0; index < transactionDatas.length; index += 1) {
-      const { transaction, utxos, hasUnshield } = transactionDatas[index];
+    // if we are handling a multisig or hardware wallet interaction
+    // we should cache the transactionDatas to pass along to the 'signers' for approval
+    // the publicInputs is not enough to 'validate' the underlying actions taking place.
 
+    // const spendingGroupData = spendingSolutionGroups.map(( solution ) => {
+    //   console.log('solutionv', solution)
+    //   const verifiableSpendingGroup = {
+    //     ...solution,
+    //     utxos: solution.utxos.map(u=>{
+    //       console.log('utxo', u)
+    //       return {
+    //         ...u,
+    //         // note: undefined
+    //       }
+    //     })
+    //   }
+
+    //   return verifiableSpendingGroup
+    // })
+
+    console.log('spendingGroupData', transactionDatas)
+
+
+    const generatedRequests = []
+    for (const {transaction, utxos, hasUnshield} of transactionDatas) {
       const { publicInputs, privateInputs, boundParams } =
         // eslint-disable-next-line no-await-in-loop
         await transaction.generateTransactionRequest(
@@ -438,6 +461,27 @@ export class TransactionBatch {
           encryptionKey,
           globalBoundParams,
         );
+        generatedRequests.push ({
+          transaction, utxos, hasUnshield,
+          publicInputs, privateInputs, boundParams
+        })
+    }
+
+
+    for (let index = 0; index < generatedRequests.length; index += 1) {
+      const { 
+        transaction, utxos, hasUnshield,
+         publicInputs, privateInputs, boundParams
+       } = generatedRequests[index];
+
+      // const { publicInputs, privateInputs, boundParams } =
+      //   // eslint-disable-next-line no-await-in-loop
+      //   await transaction.generateTransactionRequest(
+      //     wallet,
+      //     txidVersion,
+      //     encryptionKey,
+      //     globalBoundParams,
+      //   );
 
       // eslint-disable-next-line no-await-in-loop
       const signature = await wallet.sign(publicInputs, encryptionKey);
