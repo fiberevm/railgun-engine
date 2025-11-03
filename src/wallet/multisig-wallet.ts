@@ -114,45 +114,20 @@ class MultisigWallet extends AbstractWallet {
 
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   setConnector(waku: WakuConnector) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
     this.waku = waku
-    // generateSymmetric key
-    // lets just hash this for ease, we dont need anything 'too over the top' here.
     this.symmetricKey = waku.symmetricKey
     this.sessionId = waku.sessionId
     this.myId = waku.participantId
-    console.log("symmetricKey Generated", this.symmetricKey)
-    console.log("symmetricKey Generated", this.sessionId)
-    // const pubk = await getPublicViewingKey(this.viewingKeyPair.privateKey)
-    // const symBytes = await getSharedSymmetricKey(pk, pubk)
-    // if(isDefined(symBytes)){
-
-    //   const symmetricKey = ByteUtils.fastBytesToHex(symBytes)
-    //   this.symmetricKey = `0x${symmetricKey}`
-    //   console.log("symmetricKey Generated", this.symmetricKey)
-    //   return
-    // }
-    // throw new Error('Invalid symmetric key generated')
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any
   }
 
   async getMultisigApproval(requests: RequestApprovalOptions[] ): Promise<string> {
-
-    console.log(this.myId)
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     return await this.waku?.sessionManager.requestBeginSigningSession(this.sessionId, requests) as string
 
   }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars, class-methods-use-this
-
-  // async sign(publicInputs: PublicInputsRailgun, _encryptionKey: string): Promise<Signature> {
-  //   this.emit('testing multisig')
-  //   return {} as any
-  // }
 
   async sign(publicInputs: PublicInputsRailgun, subSession: string): Promise<Signature> {
 
@@ -180,19 +155,16 @@ class MultisigWallet extends AbstractWallet {
     const msg = poseidon([publicInputs.merkleRoot, publicInputs.boundParamsHash, ...publicInputs.nullifiers, ...publicInputs.commitmentsOut]);
 
     return await this.waku.sign(msg, publicInputs, subSession)
-    // throw new Error('Signer not implemented for multisig.');
   }
 
 
-  // // use this prior to 'create-wallet' in wallet -> engine interaction
+  // use this prior to 'create-wallet' in wallet -> engine interaction
   static getShareableViewingKey(spendingPublicKey: SpendingPublicKey, viewingPrivateKey: Uint8Array): string {
     const spendingPublicKeyString = Babyjubjub.packPoint(spendingPublicKey).toString('hex');
-    // console.log('spendingPublicKey', spendingPublicKeyString)
     const data: ShareableViewingKeyData = {
       vpriv: ByteUtils.formatToByteLength(viewingPrivateKey, ByteLength.UINT_256),
       spub: spendingPublicKeyString,
     };
-    console.log('data', data)
     return msgpack.encode(data).toString('hex');
   }
   
@@ -297,11 +269,8 @@ class MultisigWallet extends AbstractWallet {
   }
 
   private async loadSpendingKey(encryptionKey: string): Promise<WalletNode> {
-    if(false){
-      console.log((this.id))
-    }
-
-    return {} as WalletNode
+    this.emit('loadSpendingKey:not implemented')
+    throw new Error("not implemented.")
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -309,16 +278,6 @@ class MultisigWallet extends AbstractWallet {
     this.getAddress()
       return ZERO_ADDRESS
   }
-
-  // need these 
-  /*
-    src/services/railgun/wallets/wallets.ts:67:3 - error TS2322: Type 'RailgunWallet | MultisigWallet' is not assignable to type 'RailgunWallet'.
-      Type 'MultisigWallet' is missing the following properties from type 'RailgunWallet': getSpendingKeyPair, loadSpendingKey, getChainAddress
-
-    67   return wallet;
-        ~~~~~~~~~~~~~~
-
-  */
 
 }
 
