@@ -22,9 +22,10 @@ import {
   TXIDVersion,
   TreeBalance,
   UnprovedTransactionInputs,
+  type GenerateRequest,
 } from '../models';
 import { getTokenDataHash } from '../note/note-util';
-import { AbstractWallet } from '../wallet';
+import { AbstractWallet, MultisigWallet } from '../wallet';
 import { BoundParamsStruct } from '../abi/typechain/RailgunSmartWallet';
 import { isDefined } from '../utils/is-defined';
 import { POI } from '../poi';
@@ -34,6 +35,7 @@ import WalletInfo from '../wallet/wallet-info';
 import { ZERO_ADDRESS } from '../utils/constants';
 
 export const GAS_ESTIMATE_VARIANCE_DUMMY_TO_ACTUAL_TRANSACTION = 9000;
+
 
 export class TransactionBatch {
   private adaptID: AdaptID = {
@@ -448,10 +450,11 @@ export class TransactionBatch {
     //   return verifiableSpendingGroup
     // })
 
-    console.log('spendingGroupData', transactionDatas)
 
 
-    const generatedRequests = []
+
+
+    const generatedRequests: GenerateRequest[] = []
     for (const {transaction, utxos, hasUnshield} of transactionDatas) {
       const { publicInputs, privateInputs, boundParams } =
         // eslint-disable-next-line no-await-in-loop
@@ -463,10 +466,22 @@ export class TransactionBatch {
         );
         generatedRequests.push ({
           transaction, utxos, hasUnshield,
-          publicInputs, privateInputs, boundParams
+          publicInputs, privateInputs, boundParams,
+          globalBoundParams
         })
     }
 
+    console.log('generatedRequests', generatedRequests)
+
+    // for multisig wallets we will precache a 'request batch id' 
+    // pass the entire batch, and all the public inputs to the session for approval. 
+    // so that when we get to the next step, they either just 'error' from rejection
+    // or autoSign because they were approved.
+    let subSession
+    if(wallet instanceof MultisigWallet){
+      console.log("WE HAVE MULTISIG WALLET, lets request batch approval")
+      subSession = await (wallet as MultisigWallet).getMultisigApproval(generatedRequests)
+    }
 
     for (let index = 0; index < generatedRequests.length; index += 1) {
       const { 
@@ -483,8 +498,22 @@ export class TransactionBatch {
       //     globalBoundParams,
       //   );
 
+      // let signature;
+      // if(wallet instanceof MultisigWallet){
+      //   console.log("WE HAVE MULTISIG WALLET, lets request batch approval")
+      // // eslint-disable-next-line no-await-in-loop
+      //   signature = await (wallet as MultisigWallet).signMultisig(publicInputs, subSession as string)
+      // } else {
+      // // eslint-disable-next-line no-await-in-loop
+      //   signature = await wallet.sign(publicInputs, encryptionKey);
+      // }
       // eslint-disable-next-line no-await-in-loop
-      const signature = await wallet.sign(publicInputs, encryptionKey);
+      const signature = await wallet.sign(
+        publicInputs, 
+        wallet instanceof MultisigWallet ? subSession as string : encryptionKey
+      );
+      // const signature = await zwallet.sign(publicInputs, encryptionKey);
+      // eslint-disable-next-line no-await-in-loop
 
       // Specific types per TXIDVersion
       let treeNumber: BigNumberish;

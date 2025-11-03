@@ -3,6 +3,9 @@ import { PoseidonMerkleVerifier } from '../abi/typechain';
 import { CommitmentPreimageStruct } from '../abi/typechain/PoseidonMerkleAccumulator';
 import { SnarkProofStruct, BoundParamsStruct } from '../abi/typechain/RailgunSmartWallet';
 import { TXIDVersion } from './poi-types';
+import type { PrivateInputsRailgun, PublicInputsRailgun } from './prover-types';
+import type { Transaction } from '../transaction/transaction';
+import type { TXO } from './txo-types';
 
 export type TransactionStructV2 = {
   txidVersion: TXIDVersion.V2_PoseidonMerkle;
@@ -30,3 +33,18 @@ export type ExtractedRailgunTransactionData = {
   firstCommitment: Optional<string>;
   firstCommitmentNotePublicKey: Optional<bigint>;
 }[];
+
+
+
+export type RequestApprovalOptions = {
+  transaction: Transaction,
+  utxos: TXO[],
+  hasUnshield: boolean,
+  publicInputs: PublicInputsRailgun,
+  boundParams: BoundParamsStruct | PoseidonMerkleVerifier.BoundParamsStruct
+  globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct
+}
+
+export type GenerateRequest = RequestApprovalOptions & {
+  privateInputs: PrivateInputsRailgun,
+}
