@@ -2070,6 +2070,7 @@ abstract class AbstractWallet extends EventEmitter {
     transactionRequest: ContractTransaction,
     useRelayAdapt: boolean,
     pois: PreTransactionPOIsPerTxidLeafPerList,
+    useRelayAdapt7702: boolean,
   ): Promise<{
     isValid: boolean;
     error?: string;
@@ -2086,6 +2087,7 @@ abstract class AbstractWallet extends EventEmitter {
       this.getViewingKeyPair().privateKey,
       this.addressKeys,
       this.tokenDataGetter,
+      useRelayAdapt7702,
     );
   }
 
