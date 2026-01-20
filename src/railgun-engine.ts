@@ -1480,7 +1480,7 @@ class RailgunEngine extends EventEmitter {
     poiLaunchBlock: Optional<number>,
     supportsV3: boolean,
     relayAdapt7702ContractAddress?: string,
-    relayAdapt7702DeployerAddress?: string,
+    railgunRegistryContractAddress?: string,
   ) {
     EngineDebug.log(`loadNetwork: ${chain.type}:${chain.id}`);
 
@@ -1576,11 +1576,11 @@ class RailgunEngine extends EventEmitter {
       );
     }
 
-    if (relayAdapt7702DeployerAddress) {
+    if (railgunRegistryContractAddress) {
       ContractStore.relayAdapt7702DeployerContracts.set(
         null,
         chain,
-        new RelayAdapt7702DeployerContract(relayAdapt7702DeployerAddress, defaultProvider),
+        new RelayAdapt7702DeployerContract(railgunRegistryContractAddress, defaultProvider),
       );
     }
 
