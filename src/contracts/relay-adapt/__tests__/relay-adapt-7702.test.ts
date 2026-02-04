@@ -1518,7 +1518,7 @@ describe('relay-adapt-7702', function test() {
     );
 
     // Set high gas limit.
-    relayTransaction.gasLimit = BigInt('25000000');
+    relayTransaction.gasLimit = BigInt('15000000');
 
     // 8. Send transaction.
     const transactEventPromise = awaitRailgunSmartWalletTransact(txidVersion, chain);
