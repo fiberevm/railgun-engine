@@ -4,7 +4,7 @@ import { FallbackProvider } from 'ethers';
 import { RailgunSmartWalletContract } from './contracts/railgun-smart-wallet/V2/railgun-smart-wallet';
 import { RelayAdaptV2Contract } from './contracts/relay-adapt/V2/relay-adapt-v2';
 import { RelayAdapt7702Contract } from './contracts/relay-adapt/V2/relay-adapt-7702';
-import { RelayAdapt7702DeployerContract } from './contracts/relay-adapt/V2/relay-adapt-7702-deployer';
+import { RegistryContract } from './contracts/relay-adapt/V2/registry';
 import { Database, DatabaseNamespace } from './database/database';
 import { Prover } from './prover/prover';
 import { encodeAddress, decodeAddress } from './key-derivation/bech32';
@@ -641,8 +641,11 @@ class RailgunEngine extends EventEmitter {
       const { tree: latestTree } = await utxoMerkletree.getLatestTreeAndIndex();
       // check roots for trees up to this tree on 'scan'
       for (let treeIndex = 0; treeIndex <= latestTree; treeIndex += 1) {
+        // eslint-disable-next-line no-await-in-loop
         const index = await utxoMerkletree.getLatestIndexForTree(treeIndex);
+        // eslint-disable-next-line no-await-in-loop
         const root = await utxoMerkletree.getRoot(treeIndex);
+        // eslint-disable-next-line no-await-in-loop
         const isValid = await RailgunEngine.validateMerkleroot(
           txidVersion,
           chain,
@@ -944,7 +947,8 @@ class RailgunEngine extends EventEmitter {
         latestRailgunTransaction as RailgunTransactionV2;
       let txidMerkletreeStartScanPercentage = 0.2; // 20%
       while (isLooping) {
-        const railgunTransactionsRAW: RailgunTransactionV2[] =  await this.quickSyncRailgunTransactionsV2(chain, latestTranasction?.graphID);
+        // eslint-disable-next-line no-await-in-loop
+        const railgunTransactionsRAW: RailgunTransactionV2[] = await this.quickSyncRailgunTransactionsV2(chain, latestTranasction?.graphID);
         railgunTransactions.push(...railgunTransactionsRAW);
         latestTranasction = railgunTransactionsRAW[railgunTransactionsRAW.length - 1];
         this.emitTXIDMerkletreeScanUpdateEvent(
@@ -1528,7 +1532,7 @@ class RailgunEngine extends EventEmitter {
     const hasSmartWalletContract = ContractStore.railgunSmartWalletContracts.has(null, chain);
     const hasRelayAdaptV2Contract = ContractStore.relayAdaptV2Contracts.has(null, chain);
     const hasRelayAdapt7702Contract = ContractStore.relayAdapt7702Contracts.has(null, chain);
-    const hasRelayAdapt7702DeployerContract = ContractStore.relayAdapt7702DeployerContracts.has(null, chain);
+    const hasRegistryContract = ContractStore.railgunRegistryContract.has(null, chain);
     const hasPoseidonMerkleAccumulatorV3Contract =
       ContractStore.poseidonMerkleAccumulatorV3Contracts.has(null, chain);
     const hasPoseidonMerkleVerifierV3Contract = ContractStore.poseidonMerkleVerifierV3Contracts.has(
@@ -1541,7 +1545,7 @@ class RailgunEngine extends EventEmitter {
       hasSmartWalletContract ||
       hasRelayAdaptV2Contract ||
       hasRelayAdapt7702Contract ||
-      hasRelayAdapt7702DeployerContract ||
+      hasRegistryContract ||
       hasPoseidonMerkleAccumulatorV3Contract ||
       hasPoseidonMerkleVerifierV3Contract ||
       hasTokenVaultV3Contract
@@ -1568,7 +1572,7 @@ class RailgunEngine extends EventEmitter {
       new RelayAdaptV2Contract(relayAdaptV2ContractAddress, defaultProvider),
     );
 
-    if (relayAdapt7702ContractAddress) {
+    if (isDefined(relayAdapt7702ContractAddress)) {
       ContractStore.relayAdapt7702Contracts.set(
         null,
         chain,
@@ -1576,11 +1580,11 @@ class RailgunEngine extends EventEmitter {
       );
     }
 
-    if (railgunRegistryContractAddress) {
-      ContractStore.relayAdapt7702DeployerContracts.set(
+    if (isDefined(railgunRegistryContractAddress)) {
+      ContractStore.railgunRegistryContract.set(
         null,
         chain,
-        new RelayAdapt7702DeployerContract(railgunRegistryContractAddress, defaultProvider),
+        new RegistryContract(railgunRegistryContractAddress, defaultProvider),
       );
     }
 
@@ -2221,7 +2225,7 @@ class RailgunEngine extends EventEmitter {
    * @returns true if valid
    */
   async validateRelayAdapt7702Address(chain: Chain, address: string): Promise<boolean> {
-    const deployer = ContractStore.relayAdapt7702DeployerContracts.get(null, chain);
+    const deployer = ContractStore.railgunRegistryContract.get(null, chain);
     if (!deployer) {
       return false;
     }
@@ -2240,7 +2244,7 @@ class RailgunEngine extends EventEmitter {
 
   relayAdapt7702Contracts = ContractStore.relayAdapt7702Contracts;
 
-  relayAdapt7702DeployerContracts = ContractStore.relayAdapt7702DeployerContracts;
+  railgunRegistryContract = ContractStore.railgunRegistryContract;
 }
 
 export { RailgunEngine };

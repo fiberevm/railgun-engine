@@ -5,7 +5,7 @@ import ABIRailgunLogic_LegacyEvents from './V1/RailgunLogic_LegacyEvents.json';
 import ABIRailgunSmartWallet_Legacy_PreMar23 from './V2/RailgunSmartWallet_Legacy_PreMar23.json';
 import ABIRelayAdapt from './V2/RelayAdapt.json';
 import ABIRelayAdapt7702 from './V2/RelayAdapt7702.json';
-import ABIRelayAdapt7702Deployer from './V2/RelayAdapt7702Deployer.json';
+import ABIRegistry from './V2/Registry.json';
 
 // V2.1
 import ABIRailgunSmartWallet from './V2.1/RailgunSmartWallet.json';
@@ -21,7 +21,7 @@ export {
   ABIRailgunSmartWallet,
   ABIRelayAdapt,
   ABIRelayAdapt7702,
-  ABIRelayAdapt7702Deployer,
+  ABIRegistry,
   ABIPoseidonMerkleAccumulator,
   ABIPoseidonMerkleVerifier,
   ABITokenVault,

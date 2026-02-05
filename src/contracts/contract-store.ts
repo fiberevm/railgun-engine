@@ -6,7 +6,7 @@ import { PoseidonMerkleVerifierContract } from './railgun-smart-wallet/V3/poseid
 import { TokenVaultContract } from './railgun-smart-wallet/V3/token-vault-contract';
 import { RelayAdaptV2Contract } from './relay-adapt/V2/relay-adapt-v2';
 import { RelayAdapt7702Contract } from './relay-adapt/V2/relay-adapt-7702';
-import { RelayAdapt7702DeployerContract } from './relay-adapt/V2/relay-adapt-7702-deployer';
+import { RegistryContract } from './relay-adapt/V2/registry';
 import { RelayAdaptV3Contract } from './relay-adapt/V3/relay-adapt-v3';
 
 export class ContractStore {
@@ -14,8 +14,10 @@ export class ContractStore {
     new Registry();
 
   static readonly relayAdaptV2Contracts: Registry<RelayAdaptV2Contract> = new Registry();
+
   static readonly relayAdapt7702Contracts: Registry<RelayAdapt7702Contract> = new Registry();
-  static readonly relayAdapt7702DeployerContracts: Registry<RelayAdapt7702DeployerContract> = new Registry();
+
+  static readonly railgunRegistryContract: Registry<RegistryContract> = new Registry();
 
   static readonly poseidonMerkleAccumulatorV3Contracts: Registry<PoseidonMerkleAccumulatorContract> =
     new Registry();

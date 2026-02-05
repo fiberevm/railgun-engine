@@ -1,24 +1,24 @@
 import { Contract, Provider } from 'ethers';
-import { ABIRelayAdapt7702Deployer } from '../../../abi/abi';
-import { RelayAdapt7702Deployer } from '../../../abi/typechain/RelayAdapt7702Deployer';
+import { ABIRegistry } from '../../../abi/abi';
+import { Registry } from '../../../abi/typechain/Registry';
 
-export class RelayAdapt7702DeployerContract {
-  private readonly contract: RelayAdapt7702Deployer;
+export class RegistryContract {
+  private readonly contract: Registry;
 
   readonly address: string;
 
   /**
-   * Connect to RelayAdapt7702Deployer
-   * @param deployerAddress - address of RelayAdapt7702Deployer
+   * Connect to Registry
+   * @param deployerAddress - address of Registry
    * @param provider - Network provider
    */
   constructor(deployerAddress: string, provider: Provider) {
     this.address = deployerAddress;
     this.contract = new Contract(
       deployerAddress,
-      ABIRelayAdapt7702Deployer,
+      ABIRegistry,
       provider,
-    ) as unknown as RelayAdapt7702Deployer;
+    ) as unknown as Registry;
   }
 
   async isDeployed(deploymentAddress: string): Promise<boolean> {
