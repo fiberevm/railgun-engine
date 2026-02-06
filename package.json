@@ -36,7 +36,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Railgun-Community/engine.git"
+    "url": "https://github.com/Railgun-Community/engine.git"
   },
   "homepage": "https://github.com/Railgun-Community/engine#readme",
   "bugs": {
