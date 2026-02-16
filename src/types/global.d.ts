@@ -80,17 +80,17 @@ declare module 'snarkjs' {
   export namespace groth16 {
     function fullProve(
       inputs: unknown,
-      wasm: Uint8Array | string,
-      zkey: Uint8Array | string,
-      logger?: unknown,
+      wasm: Optional<ArrayLike<number> | Uint8Array | string>,
+      zkey: ArrayLike<number> | Uint8Array | string,
+      logger?: { debug: (log: string) => void } | unknown,
       wtnsCalcOptions?: any,
       proverOptions?: { singleThread?: boolean },
     ): Promise<SNARK>;
 
     function verify(
-      vkVerifier: VKey,
+      vkVerifier: object,
       publicSignals: unknown,
-      proof: SnarkjsProof,
+      proof: SnarkjsProof | { pi_a: SnarkjsProof['pi_a']; pi_b: SnarkjsProof['pi_b']; pi_c: SnarkjsProof['pi_c'] },
       logger?: unknown,
     ): Promise<boolean>;
   }
