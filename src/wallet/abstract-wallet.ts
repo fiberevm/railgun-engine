@@ -1017,7 +1017,7 @@ abstract class AbstractWallet extends EventEmitter {
 
         // Check if TXO has been spent.
         if (receiveCommitment.spendtxid === false) {
-          const nullifierTxid = await merkletree.getNullifierTxid(receiveCommitment.nullifier);
+          const nullifierTxid = await merkletree.getNullifierTxid(receiveCommitment.nullifier, tree);
           if (isDefined(nullifierTxid)) {
             receiveCommitment.spendtxid = nullifierTxid;
             await this.updateReceiveCommitmentInDB(chain, tree, position, receiveCommitment);
