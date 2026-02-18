@@ -103,11 +103,23 @@ export class UTXOMerkletree extends Merkletree<Commitment> {
   /**
    * Gets nullifier by its id
    * @param {string} nullifier - nullifier to check
+   * @param {number} treeIndex - optional tree to check
    * @returns Nullifier data, including txid of spent transaction
    */
-  async getNullifierTxid(nullifier: string): Promise<Optional<string>> {
+  async getNullifierTxid(nullifier: string, treeIndex?: number): Promise<Optional<string>> {
     // Return if nullifier is set
     let nullifierTxid: Optional<string>;
+
+    // Check specific tree if provided
+    if (isDefined(treeIndex)) {
+      try {
+        nullifierTxid = (await this.db.get(this.getNullifierDBPath(treeIndex, nullifier))) as string;
+      } catch {
+        nullifierTxid = undefined;
+      }
+      return nullifierTxid;
+    }
+
     const latestTree = await this.latestTree();
     for (let tree = latestTree; tree >= 0; tree -= 1) {
       try {

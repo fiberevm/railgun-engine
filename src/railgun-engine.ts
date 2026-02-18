@@ -1934,23 +1934,26 @@ class RailgunEngine extends EventEmitter {
 
     const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
 
-    const firstNullifier = nullifiers[0];
-    const firstTxid = await utxoMerkletree.getNullifierTxid(firstNullifier);
-    if (!isDefined(firstTxid)) {
-      return undefined;
+    // Iterating backwards from latest tree to find valid txid with matching nullifiers
+    const latestTree = await utxoMerkletree.latestTree();
+    for (let tree = latestTree; tree >= 0; tree -= 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const txids: Optional<string>[] = await Promise.all(
+        nullifiers.map((nullifier) => utxoMerkletree.getNullifierTxid(nullifier, tree)),
+      );
+
+      const firstTxid = txids[0];
+      if (!isDefined(firstTxid)) {
+        continue;
+      }
+
+      const allMatch = txids.every((txid) => txid === firstTxid);
+      if (allMatch) {
+        return ByteUtils.formatToByteLength(firstTxid, ByteLength.UINT_256, true);
+      }
     }
 
-    const otherTxids: Optional<string>[] = await Promise.all(
-      nullifiers
-        .slice(1)
-        .map(async (nullifier) => await utxoMerkletree.getNullifierTxid(nullifier)),
-    );
-
-    const matchingTxids = otherTxids.filter((txid) => txid === firstTxid);
-    const allMatch = matchingTxids.length === nullifiers.length - 1;
-    return allMatch
-      ? ByteUtils.formatToByteLength(firstTxid, ByteLength.UINT_256, true)
-      : undefined;
+    return undefined;
   }
 
   private async decryptBalancesAllWallets(
