@@ -4,26 +4,18 @@ import { Chain } from '../models/engine-types';
 import {
   CommitmentProcessingGroupSize,
   MerklerootValidator,
-  TREE_DEPTH,
   TREE_MAX_ITEMS,
 } from '../models/merkletree-types';
 import { Merkletree } from './merkletree';
 import {
   TXIDMerkletreeData,
   RailgunTransactionWithHash,
-  MerkleProof,
 } from '../models/formatted-types';
 import { ByteLength, fromUTF8String, ByteUtils } from '../utils/bytes';
 import { isDefined } from '../utils/is-defined';
 import { TXIDVersion } from '../models';
 import EngineDebug from '../debugger/debugger';
 import { verifyMerkleProof } from './merkle-proof';
-import { POI } from '../poi/poi';
-
-type POILaunchSnapshotNode = {
-  hash: string;
-  index: number;
-};
 
 export class TXIDMerkletree extends Merkletree<RailgunTransactionWithHash> {
   // DO NOT MODIFY
@@ -33,31 +25,21 @@ export class TXIDMerkletree extends Merkletree<RailgunTransactionWithHash> {
 
   shouldStoreMerkleroots: boolean;
 
-  shouldSavePOILaunchSnapshot: boolean;
-
-  savedPOILaunchSnapshot: Optional<boolean>;
-
   private constructor(
     db: Database,
     chain: Chain,
     txidVersion: TXIDVersion,
     merklerootValidator: MerklerootValidator,
-    isPOINode: boolean,
   ) {
-    // For Txid merkletree on POI Nodes, we will calculate for every Single tree update, in order to capture its merkleroot.
-    const commitmentProcessingGroupSize = isPOINode
-      ? CommitmentProcessingGroupSize.Single
-      : CommitmentProcessingGroupSize.XXXXLarge;
+    const commitmentProcessingGroupSize = CommitmentProcessingGroupSize.XXLarge;
 
     super(db, chain, txidVersion, merklerootValidator, commitmentProcessingGroupSize);
 
-    // For Txid merkletree on POI Nodes, store all merkleroots.
-    this.shouldStoreMerkleroots = isPOINode;
-    this.shouldSavePOILaunchSnapshot = !isPOINode;
+    this.shouldStoreMerkleroots = false;
   }
 
   /**
-   * Wallet validates merkleroots against POI Nodes.
+   * Creates a TXIDMerkletree for wallet use.
    */
   static async createForWallet(
     db: Database,
@@ -70,30 +52,6 @@ export class TXIDMerkletree extends Merkletree<RailgunTransactionWithHash> {
       chain,
       txidVersion,
       merklerootValidator,
-      false, // isPOINode
-    );
-    await merkletree.init();
-    return merkletree;
-  }
-
-  /**
-   * POI Node is the source of truth, so it will not validate merkleroots.
-   * Instead, it will process every tree update individually, and store each in the database.
-   */
-  static async createForPOINode(
-    db: Database,
-    chain: Chain,
-    txidVersion: TXIDVersion,
-  ): Promise<TXIDMerkletree> {
-    // Assume all merkleroots are valid.
-    const merklerootValidator = async () => true;
-
-    const merkletree = new TXIDMerkletree(
-      db,
-      chain,
-      txidVersion,
-      merklerootValidator,
-      true, // isPOINode
     );
     await merkletree.init();
     return merkletree;
@@ -148,35 +106,6 @@ export class TXIDMerkletree extends Merkletree<RailgunTransactionWithHash> {
       throw new Error('railgun transaction not found');
     }
 
-    // Use the snapshot if this is a legacy transaction, and we have a snapshot.
-    // (Ie., after POI has launched for this chain).
-    const poiLaunchBlock = POI.launchBlocks.get(null, this.chain);
-    const useSnapshot =
-      isDefined(poiLaunchBlock) &&
-      this.shouldSavePOILaunchSnapshot &&
-      railgunTransaction.blockNumber < poiLaunchBlock &&
-      (await this.hasSavedPOILaunchSnapshot());
-
-    if (useSnapshot) {
-      const snapshotLeaf = await this.getPOILaunchSnapshotNode(0);
-      if (!isDefined(snapshotLeaf)) {
-        throw new Error('POI Launch snapshot not found');
-      }
-      const currentMerkleProofForTree = await this.getMerkleProofWithSnapshot(
-        snapshotLeaf,
-        tree,
-        index,
-      );
-      if (!verifyMerkleProof(currentMerkleProofForTree)) {
-        throw new Error('Invalid merkle proof for snapshot');
-      }
-      return {
-        railgunTransaction,
-        currentMerkleProofForTree,
-        currentTxidIndexForTree: snapshotLeaf.index,
-      };
-    }
-
     const currentMerkleProofForTree = await this.getMerkleProof(tree, index);
     if (!verifyMerkleProof(currentMerkleProofForTree)) {
       throw new Error('Invalid merkle proof');
@@ -187,65 +116,6 @@ export class TXIDMerkletree extends Merkletree<RailgunTransactionWithHash> {
       railgunTransaction,
       currentMerkleProofForTree,
       currentTxidIndexForTree,
-    };
-  }
-
-  async getMerkleProofWithSnapshot(
-    snapshotLeaf: POILaunchSnapshotNode,
-    tree: number,
-    index: number,
-  ): Promise<MerkleProof> {
-    const leaf = await this.getNodeHash(tree, 0, index);
-
-    const rightmostIndices = TXIDMerkletree.getRightmostNonzeroIndices(snapshotLeaf.index);
-
-    // Get indexes of path elements to fetch
-    const elementsIndices: number[] = [index ^ 1];
-
-    // Loop through each level and calculate index
-    while (elementsIndices.length < TREE_DEPTH) {
-      // Shift right and flip last bit
-      elementsIndices.push((elementsIndices[elementsIndices.length - 1] >> 1) ^ 1);
-    }
-
-    // Fetch path elements
-    const elements = await Promise.all(
-      elementsIndices.map(async (elementIndex, level) => {
-        const snapshotIndexAtLevel = rightmostIndices[level];
-        if (elementIndex > snapshotIndexAtLevel) {
-          // Get snapshot node hash (exact value)
-          return this.zeros[level];
-        }
-
-        if (elementIndex === snapshotIndexAtLevel) {
-          // Get snapshot node hash (exact value)
-          const node = await this.getPOILaunchSnapshotNode(level);
-          if (!isDefined(node)) {
-            throw new Error('POI Launch snapshot node not found');
-          }
-          return node.hash;
-        }
-
-        // Get current node hash (always same as snapshot)
-        return this.getNodeHash(tree, level, elementIndex);
-      }),
-    );
-
-    // Convert index to bytes data, the binary representation is the indices of the merkle path
-    // Pad to 32 bytes
-    const indices = ByteUtils.nToHex(BigInt(index), ByteLength.UINT_256);
-
-    const rootNode = await this.getPOILaunchSnapshotNode(TREE_DEPTH);
-    if (!isDefined(rootNode)) {
-      throw new Error('POI Launch snapshot root not found');
-    }
-    const root = rootNode.hash;
-
-    return {
-      leaf,
-      elements,
-      indices,
-      root,
     };
   }
 
@@ -319,29 +189,6 @@ export class TXIDMerkletree extends Merkletree<RailgunTransactionWithHash> {
 
       const { railgunTxid } = railgunTransactionWithTxid;
 
-      const latestLeafIndex = nextIndex - 1;
-
-      if (
-        this.shouldSavePOILaunchSnapshot &&
-        this.savedPOILaunchSnapshot !== true &&
-        batchLeaves.length > 0
-      ) {
-        const poiLaunchBlock = POI.launchBlocks.get(null, this.chain);
-        if (
-          isDefined(poiLaunchBlock) &&
-          railgunTransactionWithTxid.blockNumber >= poiLaunchBlock
-        ) {
-          // eslint-disable-next-line no-await-in-loop
-          await this.queueLeaves(batchTree, batchStartIndex, batchLeaves);
-          batchLeaves = [];
-          batchTree = -1;
-          batchStartIndex = -1;
-        }
-      }
-
-      // eslint-disable-next-line no-await-in-loop
-      await this.savePOILaunchSnapshotIfNecessary(railgunTransactionWithTxid, latestLeafIndex);
-
       if (batchTree === -1) {
         batchTree = nextTree;
         batchStartIndex = nextIndex;
@@ -391,95 +238,6 @@ export class TXIDMerkletree extends Merkletree<RailgunTransactionWithHash> {
       return { tree: tree + 1, index: 0 };
     }
     return { tree, index: index + 1 };
-  }
-
-  private async savePOILaunchSnapshotIfNecessary(
-    railgunTransactionWithTxid: RailgunTransactionWithHash,
-    latestLeafIndex: number,
-  ): Promise<void> {
-    if (!this.shouldSavePOILaunchSnapshot) {
-      return;
-    }
-
-    const poiLaunchBlock = POI.launchBlocks.get(null, this.chain);
-    if (!isDefined(poiLaunchBlock)) {
-      return;
-    }
-    if (railgunTransactionWithTxid.blockNumber < poiLaunchBlock) {
-      return;
-    }
-
-    const shouldSavePOILaunchSnapshot = !(await this.hasSavedPOILaunchSnapshot());
-
-    if (shouldSavePOILaunchSnapshot) {
-      // Make sure trees have fully updated data.
-      await this.updateTreesFromWriteQueue();
-
-      // eslint-disable-next-line no-await-in-loop
-      await this.savePOILaunchSnapshot(latestLeafIndex);
-    }
-  }
-
-  private async hasSavedPOILaunchSnapshot(): Promise<boolean> {
-    if (this.savedPOILaunchSnapshot === true) {
-      return this.savedPOILaunchSnapshot;
-    }
-    const level = 0;
-    const node = await this.getPOILaunchSnapshotNode(level);
-
-    return isDefined(node);
-  }
-
-  async getPOILaunchSnapshotNode(level: number): Promise<Optional<POILaunchSnapshotNode>> {
-    try {
-      return (await this.db.get(
-        this.getPOILaunchSnapshotNodeDBPath(level),
-        'json',
-      )) as POILaunchSnapshotNode;
-    } catch (cause) {
-      if (!(cause instanceof Error)) {
-        throw new Error('Non-error thrown in getPOILaunchSnapshotNode', { cause });
-      }
-      return undefined;
-    }
-  }
-
-  private static getRightmostNonzeroIndices(latestLeafIndex: number): number[] {
-    const rightmostIndices = [latestLeafIndex];
-    while (rightmostIndices.length < TREE_DEPTH + 1) {
-      rightmostIndices.push(rightmostIndices[rightmostIndices.length - 1] >> 1);
-    }
-    return rightmostIndices;
-  }
-
-  private async savePOILaunchSnapshot(latestLeafIndex: number): Promise<void> {
-    if (!this.shouldSavePOILaunchSnapshot) {
-      return;
-    }
-
-    const snapshotNodeWriteBatch: PutBatch[] = [];
-
-    const indicesPerLevel = TXIDMerkletree.getRightmostNonzeroIndices(latestLeafIndex);
-
-    for (let level = 0; level < TREE_DEPTH + 1; level += 1) {
-      const index = indicesPerLevel[level];
-
-      // eslint-disable-next-line no-await-in-loop
-      const hash = await this.getNodeHash(0, level, index);
-      const node: POILaunchSnapshotNode = { hash, index };
-
-      snapshotNodeWriteBatch.push({
-        type: 'put',
-        key: this.getPOILaunchSnapshotNodeDBPath(level).join(':'),
-        value: node,
-      });
-    }
-    await this.db.batch(snapshotNodeWriteBatch, 'json');
-
-    if (!(await this.hasSavedPOILaunchSnapshot())) {
-      throw new Error('Error saving POI launch snapshot');
-    }
-    this.savedPOILaunchSnapshot = true;
   }
 
   async clearLeavesForInvalidVerificationHash(numLeavesToClear: number): Promise<void> {
@@ -543,13 +301,6 @@ export class TXIDMerkletree extends Merkletree<RailgunTransactionWithHash> {
   protected invalidRootCallback(): Promise<void> {
     // Unused for Txid merkletree
     return Promise.resolve();
-  }
-
-  private getPOILaunchSnapshotNodeDBPath(level: number): string[] {
-    const snapshotPrefix = fromUTF8String('poi-launch-snapshot');
-    return [...this.getMerkletreeDBPrefix(), snapshotPrefix, level].map((el) =>
-      ByteUtils.formatToByteLength(el, ByteLength.UINT_256),
-    );
   }
 
   private getRailgunTxidLookupDBPath(railgunTxid: string): string[] {

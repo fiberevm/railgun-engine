@@ -1,8 +1,5 @@
 import { expect } from 'chai';
-import { groth16 } from 'snarkjs';
 import memdown from 'memdown';
-import { Prover } from '../prover';
-import { testArtifactsGetter } from '../../test/helper.test';
 import TestVectorPOI from '../../test/test-vector-poi.json';
 import { createRailgunTransactionWithHash } from '../../transaction/railgun-txid';
 import { verifyMerkleProof } from '../../merkletree/merkle-proof';
@@ -18,12 +15,9 @@ import { Database } from '../../database/database';
 import { ShieldNote, TransactNote, getTokenDataERC20 } from '../../note';
 import { ByteLength, ByteUtils } from '../../utils';
 import { WalletNode } from '../../key-derivation/wallet-node';
-import { getGlobalTreePosition } from '../../poi/global-tree-position';
-import { BlindedCommitment } from '../../poi/blinded-commitment';
-import { PublicInputsPOI } from '../../models';
-import { ProofCachePOI } from '../proof-cache-poi';
+import { getGlobalTreePosition } from '../../utils/global-tree-position';
+import { BlindedCommitment } from '../../utils/blinded-commitment';
 import { config } from '../../test/config.test';
-import { POI } from '../../poi/poi';
 
 const chain: Chain = {
   type: 0,
@@ -31,99 +25,6 @@ const chain: Chain = {
 };
 
 describe('prover', () => {
-  beforeEach(() => {
-    ProofCachePOI.clear_TEST_ONLY();
-    POI.launchBlocks.set(null, chain, 0);
-  });
-
-  it('Should generate and validate POI proof - 3x3', async () => {
-    const prover = new Prover(testArtifactsGetter);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    prover.setSnarkJSGroth16(groth16);
-
-    const testVector = TestVectorPOI;
-
-    // Will automatically choose 3x3
-    const { proof, publicInputs } = await prover.provePOI(
-      testVector as any,
-      testVector.listKey,
-      [], // blindedCommitmentsIn - just for logging
-      testVector.blindedCommitmentsOut,
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      (progress) => {
-        // console.log(progress);
-      },
-    );
-
-    expect(proof.pi_a.length).to.equal(2);
-    expect(proof.pi_b.length).to.equal(2);
-    expect(proof.pi_b[0].length).to.equal(2);
-    expect(proof.pi_b[1].length).to.equal(2);
-    expect(proof.pi_c.length).to.equal(2);
-
-    expect(proof).to.be.an('object');
-
-    const publicInputsCalculated: PublicInputsPOI = prover.getPublicInputsPOI(
-      testVector.anyRailgunTxidMerklerootAfterTransaction,
-      testVector.blindedCommitmentsOut,
-      testVector.poiMerkleroots,
-      testVector.railgunTxidIfHasUnshield,
-      3,
-      3,
-    );
-    expect(publicInputs.railgunTxidIfHasUnshield).to.deep.equal(
-      publicInputsCalculated.railgunTxidIfHasUnshield,
-    );
-
-    expect(publicInputs).to.deep.equal(publicInputsCalculated);
-
-    expect(publicInputs.poiMerkleroots.length).to.equal(3);
-    expect(publicInputs.blindedCommitmentsOut.length).to.equal(3);
-
-    expect(await prover.verifyPOIProof(publicInputs, proof, 3, 3)).to.equal(true);
-  }).timeout(30000);
-
-  it('Should generate and validate POI proof - 13x13', async () => {
-    const prover = new Prover(testArtifactsGetter);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    prover.setSnarkJSGroth16(groth16);
-
-    const testVector = TestVectorPOI;
-
-    const { proof, publicInputs } = await prover.provePOIForInputsOutputs(
-      testVector as any,
-      testVector.listKey,
-      [], // blindedCommitmentsIn - just for logging
-      testVector.blindedCommitmentsOut,
-      13, // maxInputs
-      13, // maxOutputs
-      () => {}, // progress
-    );
-
-    expect(proof.pi_a.length).to.equal(2);
-    expect(proof.pi_b.length).to.equal(2);
-    expect(proof.pi_b[0].length).to.equal(2);
-    expect(proof.pi_b[1].length).to.equal(2);
-    expect(proof.pi_c.length).to.equal(2);
-
-    expect(proof).to.be.an('object');
-
-    const publicInputsCalculated: PublicInputsPOI = prover.getPublicInputsPOI(
-      testVector.anyRailgunTxidMerklerootAfterTransaction,
-      testVector.blindedCommitmentsOut,
-      testVector.poiMerkleroots,
-      testVector.railgunTxidIfHasUnshield,
-      13,
-      13,
-    );
-    expect(publicInputs).to.deep.equal(publicInputsCalculated);
-
-    expect(publicInputs.poiMerkleroots.length).to.equal(13);
-    expect(publicInputs.blindedCommitmentsOut.length).to.equal(13);
-
-    expect(await prover.verifyPOIProof(publicInputs, proof, 13, 13)).to.equal(true);
-  }).timeout(30000);
-
   it('Should verify input vector', async () => {
     const testVector = TestVectorPOI;
 

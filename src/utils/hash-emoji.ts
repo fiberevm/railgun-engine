@@ -6,9 +6,6 @@ export const emojiHash = (str: string, length?: number): string => {
   return hashEmoji(str, length);
 };
 
-export const emojiHashForPOIStatusInfo = (str: string): string => {
-  return emojiHash(ByteUtils.strip0x(str), 2);
-};
 
 const hashEmoji = (string: string, hashLength = 1) => {
   const hash = crypto.createHash('sha256');

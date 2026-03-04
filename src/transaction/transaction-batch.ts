@@ -4,7 +4,7 @@ import { Prover } from '../prover/prover';
 import { HashZero } from '../utils/bytes';
 import { findExactSolutionsOverTargetValue } from '../solutions/simple-solutions';
 import { Transaction } from './transaction';
-import { SpendingSolutionGroup, TXO, UnshieldData } from '../models/txo-types';
+import { SpendingSolutionGroup, TXO, UnshieldData, WalletBalanceBucket } from '../models/txo-types';
 import { AdaptID, OutputType, TokenData, TokenType } from '../models/formatted-types';
 import { TransactionStructV2, TransactionStructV3 } from '../models/transaction-types';
 import { createSpendingSolutionsForValue } from '../solutions/complex-solutions';
@@ -18,7 +18,6 @@ import { stringifySafe } from '../utils/stringify';
 import { Chain } from '../models/engine-types';
 import { TransactNote } from '../note/transact-note';
 import {
-  PreTransactionPOIsPerTxidLeafPerList,
   TXIDVersion,
   TreeBalance,
   UnprovedTransactionInputs,
@@ -27,7 +26,6 @@ import { getTokenDataHash } from '../note/note-util';
 import { AbstractWallet } from '../wallet';
 import { BoundParamsStruct } from '../abi/typechain/RailgunSmartWallet';
 import { isDefined } from '../utils/is-defined';
-import { POI } from '../poi';
 import { PoseidonMerkleVerifier } from '../abi/typechain';
 import { Memo } from '../note/memo';
 import WalletInfo from '../wallet/wallet-info';
@@ -146,7 +144,7 @@ export class TransactionBatch {
     // Calculate total required to be supplied by UTXOs
     const totalRequired = outputTotal + this.unshieldTotal(tokenHash);
 
-    const balanceBucketFilter = await POI.getSpendableBalanceBuckets(this.chain);
+    const balanceBucketFilter = [WalletBalanceBucket.Spendable];
 
     const treeSortedBalances = await wallet.balancesByTreeForToken(
       txidVersion,
@@ -367,11 +365,10 @@ export class TransactionBatch {
     txidVersion: TXIDVersion,
     encryptionKey: string,
     progressCallback: (progress: number, status: string) => void,
-    shouldGeneratePreTransactionPOIs: boolean,
+    _shouldGeneratePreTransactionPOIs?: boolean,
     originShieldTxidForSpendabilityOverride?: string,
   ): Promise<{
     provedTransactions: (TransactionStructV2 | TransactionStructV3)[];
-    preTransactionPOIsPerTxidLeafPerList: PreTransactionPOIsPerTxidLeafPerList;
   }> {
     const spendingSolutionGroups = await this.generateValidSpendingSolutionGroupsAllOutputs(
       wallet,
@@ -388,9 +385,6 @@ export class TransactionBatch {
     );
 
     const provedTransactions: (TransactionStructV2 | TransactionStructV3)[] = [];
-
-    const preTransactionPOIsPerTxidLeafPerList: PreTransactionPOIsPerTxidLeafPerList = {};
-    const activeListKeys = POI.getActiveListKeys();
 
     const transactionDatas = spendingSolutionGroups.map((spendingSolutionGroup) => {
       const changeOutput = TransactionBatch.getChangeOutput(wallet, spendingSolutionGroup);
@@ -472,32 +466,6 @@ export class TransactionBatch {
         }
       }
 
-      if (shouldGeneratePreTransactionPOIs) {
-        for (let i = 0; i < activeListKeys.length; i += 1) {
-          const listKey = activeListKeys[i];
-          preTransactionPOIsPerTxidLeafPerList[listKey] ??= {};
-
-          const preTransactionProofProgressStatus = `Generating proof of spendability ${
-            i + index * activeListKeys.length + 1
-          }/${spendingSolutionGroups.length * activeListKeys.length}...`;
-
-          // eslint-disable-next-line no-await-in-loop
-          const { txidLeafHash, preTransactionPOI } = await wallet.generatePreTransactionPOI(
-            txidVersion,
-            this.chain,
-            listKey,
-            utxos,
-            publicInputs,
-            privateInputs,
-            treeNumber,
-            hasUnshield,
-            (progress: number) => progressCallback(progress, preTransactionProofProgressStatus),
-          );
-
-          preTransactionPOIsPerTxidLeafPerList[listKey][txidLeafHash] = preTransactionPOI;
-        }
-      }
-
       // NOTE: For multisig, at this point the UnprovedTransactionInputs are
       // forwarded to the next participant, along with an array of signatures.
 
@@ -514,7 +482,7 @@ export class TransactionBatch {
       );
       provedTransactions.push(provedTransaction);
     }
-    return { provedTransactions, preTransactionPOIsPerTxidLeafPerList };
+    return { provedTransactions };
   }
 
   private static logDummySpendingSolutionGroupsSummary(

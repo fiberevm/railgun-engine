@@ -1,5 +1,5 @@
-import { poseidon } from '../utils/poseidon';
-import { ByteLength, ByteUtils } from '../utils/bytes';
+import { poseidon } from './poseidon';
+import { ByteLength, ByteUtils } from './bytes';
 
 const formatHash = (hash: bigint): string => {
   return `0x${ByteUtils.nToHex(hash, ByteLength.UINT_256)}`;

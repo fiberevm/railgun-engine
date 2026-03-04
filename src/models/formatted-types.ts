@@ -1,4 +1,4 @@
-import { POIsPerList, TXIDVersion } from './poi-types';
+import { TXIDVersion } from './poi-types';
 
 export type BytesData = bigint | number | ArrayLike<number> | string;
 
@@ -342,7 +342,6 @@ export type StoredReceiveCommitment = {
   decrypted: NoteSerialized | LegacyNoteSerialized;
   senderAddress: Optional<string>;
   commitmentType: CommitmentType;
-  poisPerList: Optional<POIsPerList>;
   blindedCommitment: Optional<string>;
   transactCreationRailgunTxid: Optional<string>;
 };
@@ -358,7 +357,6 @@ export type StoredSendCommitment = {
   walletSource: Optional<string>;
   recipientAddress: string;
   railgunTxid: Optional<string>;
-  poisPerList: Optional<POIsPerList>;
   blindedCommitment: Optional<string>;
 };
 
@@ -397,9 +395,3 @@ export type RelayAdaptShieldNFTRecipient = {
   recipientAddress: string;
 };
 
-export type POICommitmentOutData = {
-  blindedCommitmentsOut: string[];
-  npksOut: bigint[];
-  valuesOut: bigint[];
-  poisPerList: Optional<POIsPerList>;
-};

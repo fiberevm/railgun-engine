@@ -5,14 +5,13 @@ import {
   RailgunTransactionV3,
 } from './formatted-types';
 import { Chain } from './engine-types';
-import { POIsPerList, TXIDVersion } from './poi-types';
+import { TXIDVersion } from './poi-types';
 
 export enum EngineEvent {
   WalletDecryptBalancesComplete = 'decrypted-balances',
   ContractNullifierReceived = 'nullified',
   UTXOMerkletreeHistoryScanUpdate = 'utxo-merkletree-history-scan-update',
   TXIDMerkletreeHistoryScanUpdate = 'txid-merkletree-history-scan-update',
-  POIProofUpdate = 'POIProofUpdate',
   UTXOScanDecryptBalancesComplete = 'UTXOScanDecryptBalancesComplete',
 }
 
@@ -68,7 +67,6 @@ export type UnshieldStoredEvent = {
   blockNumber: number;
   eventLogIndex: Optional<number>;
   railgunTxid: Optional<string>;
-  poisPerList: Optional<POIsPerList>;
 };
 
 export type AccumulatedEvents = {
@@ -103,22 +101,3 @@ export enum MerkletreeScanStatus {
   Incomplete = 'Incomplete',
 }
 
-export enum POIProofEventStatus {
-  LoadingNextBatch = 'LoadingNextBatch',
-  InProgress = 'InProgress',
-  Error = 'Error',
-  AllProofsCompleted = 'AllProofsCompleted',
-}
-
-export type POICurrentProofEventData = {
-  status: POIProofEventStatus;
-  txidVersion: TXIDVersion;
-  chain: Chain;
-  progress: number;
-  listKey: string;
-  txid: string;
-  railgunTxid: string;
-  index: number;
-  totalCount: number;
-  errorMsg: Optional<string>;
-};

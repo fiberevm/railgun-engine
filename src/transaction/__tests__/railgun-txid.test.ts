@@ -5,7 +5,7 @@ import {
   getRailgunTxidLeafHash,
 } from '../railgun-txid';
 import { ByteLength, ByteUtils } from '../../utils';
-import { getGlobalTreePosition } from '../../poi/global-tree-position';
+import { getGlobalTreePosition } from '../../utils/global-tree-position';
 
 chai.use(chaiAsPromised);
 const { expect } = chai;

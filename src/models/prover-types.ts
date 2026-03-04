@@ -105,67 +105,7 @@ export type NativeProverFormattedJsonInputsRailgun = {
   valueOut: string[];
 };
 
-export type PublicInputsPOI = {
-  anyRailgunTxidMerklerootAfterTransaction: bigint;
-  blindedCommitmentsOut: bigint[];
-  poiMerkleroots: bigint[];
-  railgunTxidIfHasUnshield: bigint;
-};
-
-export type FormattedCircuitInputsPOI = {
-  // Public inputs
-  anyRailgunTxidMerklerootAfterTransaction: bigint;
-  poiMerkleroots: bigint[];
-
-  // Private inputs
-  boundParamsHash: bigint;
-  nullifiers: bigint[];
-  commitmentsOut: bigint[];
-  spendingPublicKey: [bigint, bigint];
-  nullifyingKey: bigint;
-  token: bigint;
-  randomsIn: bigint[];
-  valuesIn: bigint[];
-  utxoPositionsIn: bigint[];
-  utxoTreeIn: bigint;
-  npksOut: bigint[];
-  valuesOut: bigint[];
-  utxoBatchGlobalStartPositionOut: bigint;
-  railgunTxidIfHasUnshield: bigint;
-  railgunTxidMerkleProofIndices: bigint;
-  railgunTxidMerkleProofPathElements: bigint[];
-  poiInMerkleProofIndices: bigint[];
-  poiInMerkleProofPathElements: bigint[][];
-};
-
-export type NativeProverFormattedJsonInputsPOI = {
-  // Public inputs
-  anyRailgunTxidMerklerootAfterTransaction: string;
-  poiMerkleroots: string[];
-
-  // Private inputs
-  boundParamsHash: string;
-  nullifiers: string[];
-  commitmentsOut: string[];
-  spendingPublicKey: [string, string];
-  nullifyingKey: string;
-  token: string;
-  randomsIn: string[];
-  valuesIn: string[];
-  utxoPositionsIn: string[];
-  utxoTreeIn: string;
-  npksOut: string[];
-  valuesOut: string[];
-  utxoBatchGlobalStartPositionOut: string;
-  railgunTxidIfHasUnshield: string;
-  railgunTxidMerkleProofIndices: string;
-  railgunTxidMerkleProofPathElements: string[];
-  poiInMerkleProofIndices: string[];
-  poiInMerkleProofPathElements: string[][];
-};
-
 export type ArtifactGetter = {
   assertArtifactExists: (nullifiers: number, commitments: number) => void;
   getArtifacts: (publicInputs: PublicInputsRailgun) => Promise<Artifact>;
-  getArtifactsPOI: (maxInputs: number, maxOutputs: number) => Promise<Artifact>;
 };

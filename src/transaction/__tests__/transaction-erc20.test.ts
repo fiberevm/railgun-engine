@@ -47,7 +47,6 @@ import { BoundParamsStruct } from '../../abi/typechain/RailgunSmartWallet';
 import { PollingJsonRpcProvider } from '../../provider/polling-json-rpc-provider';
 import { UTXOMerkletree } from '../../merkletree/utxo-merkletree';
 import { AES } from '../../utils/encryption/aes';
-import { POI } from '../../poi/poi';
 import { PoseidonMerkleVerifier } from '../../abi/typechain';
 import { addChainSupportsV3 } from '../../chain/chain';
 import { XChaCha20 } from '../../utils/encryption/x-cha-cha-20';
@@ -122,8 +121,6 @@ describe('transaction-erc20', function test() {
     addChainSupportsV3(chain);
 
     await wallet.loadUTXOMerkletree(txidVersion, utxoMerkletree);
-
-    POI.launchBlocks.set(null, chain, 0);
 
     // Load fake contract
     ContractStore.railgunSmartWalletContracts.set(

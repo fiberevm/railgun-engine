@@ -57,7 +57,6 @@ export type TransactionHistoryTokenAmount = {
   outputType?: OutputType;
   walletSource?: string;
   memoText: Optional<string>;
-  hasValidPOIForActiveLists: boolean;
 };
 export type TransactionHistoryTransferTokenAmount = TransactionHistoryTokenAmount & {
   recipientAddress: string;

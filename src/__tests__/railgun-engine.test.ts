@@ -1,6 +1,6 @@
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
-import { Contract, TransactionReceipt, Wallet } from 'ethers';
+import { Contract, Wallet } from 'ethers';
 import memdown from 'memdown';
 import { groth16 } from 'snarkjs';
 import sinon, { SinonStub } from 'sinon';
@@ -30,11 +30,9 @@ import {
   LegacyGeneratedCommitment,
   NFTTokenData,
   OutputType,
-  RailgunTransactionV2,
-  RailgunTransactionVersion,
   TokenType,
 } from '../models/formatted-types';
-import { Prover, SnarkJSGroth16 } from '../prover/prover';
+import { SnarkJSGroth16 } from '../prover/prover';
 import { TestERC20 } from '../test/abi/typechain/TestERC20';
 import { TestERC721 } from '../test/abi/typechain/TestERC721';
 import { promiseTimeout } from '../utils/promises';
@@ -49,32 +47,12 @@ import { createPollingJsonRpcProviderForListeners } from '../provider/polling-ut
 import { isDefined } from '../utils/is-defined';
 import { PollingJsonRpcProvider } from '../provider/polling-json-rpc-provider';
 import { UTXOMerkletree } from '../merkletree/utxo-merkletree';
-import { POI } from '../poi/poi';
-import {
-  MOCK_LIST,
-  MOCK_LIST_ACTIVE,
-  MOCK_LIST_KEY,
-  TestPOINodeInterface,
-} from '../test/test-poi-node-interface.test';
-import { hashBoundParamsV2 } from '../transaction/bound-params';
-import { calculateRailgunTransactionVerificationHash } from '../transaction/railgun-txid';
 import { TXIDMerkletree } from '../merkletree/txid-merkletree';
-import { POIEngineProofInputs, TXIDVersion, TXOPOIListStatus } from '../models/poi-types';
-import { BlindedCommitment } from '../poi/blinded-commitment';
-import {
-  GLOBAL_UTXO_POSITION_UNSHIELD_EVENT_HARDCODED_VALUE,
-  GLOBAL_UTXO_TREE_UNSHIELD_EVENT_HARDCODED_VALUE,
-  getGlobalTreePosition,
-} from '../poi/global-tree-position';
-import { ShieldNote } from '../note';
+import { TXIDVersion } from '../models/poi-types';
 import { AES } from '../utils/encryption/aes';
-import { createDummyMerkleProof } from '../merkletree/merkle-proof';
 import { RailgunVersionedSmartContracts } from '../contracts/railgun-smart-wallet/railgun-versioned-smart-contracts';
-import { TransactionStructV2, TransactionStructV3 } from '../models/transaction-types';
 import { WalletBalanceBucket } from '../models/txo-types';
 import { XChaCha20 } from '../utils/encryption/x-cha-cha-20';
-import { POIValidation } from '../validation/poi-validation';
-import { TokenDataGetter } from '../token';
 
 chai.use(chaiAsPromised);
 
@@ -97,7 +75,6 @@ let transactNoteRandomStub: SinonStub;
 let transactSenderRandomStub: SinonStub;
 let aesGetRandomIVStub: SinonStub;
 let xChaChaGetRandomIVStub: SinonStub;
-let poiGetListsCanGenerateSpentPOIsStub: SinonStub;
 
 const erc20Address = config.contracts.rail;
 const nftAddress = config.contracts.testERC721;
@@ -145,115 +122,11 @@ describe('railgun-engine', function test() {
       tx.wait(),
       promiseTimeout(awaitScan(wallet, chain), 10000, 'Timed out scanning after test token shield'),
     ]);
-    await wallet.refreshPOIsForTXIDVersion(chain, txidVersion, true);
 
     const balancePost = await erc20Token.balanceOf(ethersWallet.address);
     expect(balancePost).to.equal(balance - value);
 
     return shield;
-  };
-
-  const generateAndVerifyPOI = async (
-    shield: ShieldNote,
-    transactReceipt: TransactionReceipt,
-    transactions: (TransactionStructV2 | TransactionStructV3)[],
-    expectedProofInputs: POIEngineProofInputs,
-    expectedListKey: string,
-    expectedBlindedCommitmentsOut: string[],
-    isUnshieldOnly = false,
-  ) => {
-    const proverSpy = sinon.spy(Prover.prototype, 'provePOI');
-
-    const ethersAddress = await ethersWallet.getAddress();
-
-    try {
-      const { blockNumber } = transactReceipt;
-
-      if (isV2Test()) {
-        let utxoBatchStartPosition = isUnshieldOnly
-          ? GLOBAL_UTXO_POSITION_UNSHIELD_EVENT_HARDCODED_VALUE
-          : 1;
-        const utxoTree = isUnshieldOnly ? GLOBAL_UTXO_TREE_UNSHIELD_EVENT_HARDCODED_VALUE : 0;
-
-        // No railgunTxid yet - no POI submitted.
-        await wallet.generatePOIsAllSentCommitmentsAndUnshieldEvents(chain, txidVersion);
-        expect(proverSpy.getCalls()).to.deep.equal([]);
-
-        const transactionsV2 = transactions as TransactionStructV2[];
-
-        for (const transaction of transactionsV2) {
-          const railgunTransaction: RailgunTransactionV2 = {
-            version: RailgunTransactionVersion.V2,
-            graphID: '0x01',
-            commitments: transaction.commitments as string[],
-            nullifiers: transaction.nullifiers as string[],
-            boundParamsHash: ByteUtils.nToHex(
-              hashBoundParamsV2(transactionsV2[0].boundParams),
-              ByteLength.UINT_256,
-            ),
-            unshield: {
-              tokenData: shield.tokenData,
-              toAddress: ethersAddress,
-              value: transaction.unshieldPreimage.value.toString(),
-            },
-            timestamp: 1_000_000,
-            txid: ByteUtils.strip0x(transactReceipt.hash),
-            blockNumber,
-            utxoTreeIn: 0,
-            utxoTreeOut: utxoTree,
-            utxoBatchStartPositionOut: utxoBatchStartPosition,
-            verificationHash: calculateRailgunTransactionVerificationHash(
-              undefined,
-              transaction.nullifiers[0] as string,
-            ),
-          };
-          utxoBatchStartPosition += transaction.commitments.length;
-
-          // eslint-disable-next-line no-await-in-loop, dot-notation
-          await engine['handleNewRailgunTransactionsV2'](
-            txidVersion,
-            chain,
-            [railgunTransaction],
-            undefined, // latestVerificationHash
-            0.5, // startScanPercentage
-            0.9, // endScanPercentage
-          );
-        }
-      }
-
-      // To debug POI Status Info:
-      // await wallet.refreshSpentPOIsAllSentCommitmentsAndUnshieldEvents(txidVersion, chain);
-      // console.log(await wallet.getTXOsReceivedPOIStatusInfo(txidVersion, chain));
-      // console.log(await wallet.getTXOsSpentPOIStatusInfo(txidVersion, chain));
-
-      await wallet.generatePOIsAllSentCommitmentsAndUnshieldEvents(chain, txidVersion);
-
-      const calls = proverSpy.getCalls();
-      expect(calls.length).to.equal(1);
-      const firstCallArgs = proverSpy.getCalls()[0].args;
-
-      const proofInputsWithoutPOIMerkleroots = {
-        ...firstCallArgs[0],
-        poiMerkleroots: [],
-        poiInMerkleProofPathElements: [],
-      };
-      const expectedProofInputsWithoutPOIMerkleroots = {
-        ...expectedProofInputs,
-        poiMerkleroots: [],
-        poiInMerkleProofPathElements: [],
-      };
-      // inputs: POIEngineProofInputs
-      expect(proofInputsWithoutPOIMerkleroots).to.deep.equal(
-        expectedProofInputsWithoutPOIMerkleroots,
-      );
-
-      // listKey: string
-      expect(firstCallArgs[1]).to.deep.equal(expectedListKey);
-      // blindedCommitmentsOut: string[]
-      expect(firstCallArgs[3]).to.deep.equal(expectedBlindedCommitmentsOut);
-    } finally {
-      proverSpy.restore();
-    }
   };
 
   beforeEach(async () => {
@@ -284,13 +157,6 @@ describe('railgun-engine', function test() {
     xChaChaGetRandomIVStub = sinon
       .stub(XChaCha20, 'getRandomIV')
       .returns('abcdef1234567890abcdef1234567890');
-    poiGetListsCanGenerateSpentPOIsStub = sinon
-      .stub(POI, 'getListKeysCanGenerateSpentPOIs')
-      .returns([MOCK_LIST_KEY]);
-
-    // Activate POI list
-    POI.init([MOCK_LIST_ACTIVE], new TestPOINodeInterface());
-
     // EngineDebug.init(console); // uncomment for logs
     provider = new PollingJsonRpcProvider(config.rpc, config.chainId);
     chain = {
@@ -335,10 +201,6 @@ describe('railgun-engine', function test() {
     );
     utxoMerkletree = engine.getUTXOMerkletree(txidVersion, chain);
     txidMerkletree = engine.getTXIDMerkletree(txidVersion, chain);
-  });
-
-  after(() => {
-    POI.init([MOCK_LIST], new TestPOINodeInterface());
   });
 
   it('[HH] Should load existing wallets', async function run() {
@@ -410,7 +272,6 @@ describe('railgun-engine', function test() {
       undefined, // progressCallback
       false, // deferCompletionEvent
     );
-    await wallet.refreshPOIsForTXIDVersion(chain, txidVersion, true);
     const balance = await wallet.getBalanceERC20(txidVersion, chain, tokenAddress, [
       WalletBalanceBucket.Spendable,
     ]);
@@ -418,7 +279,6 @@ describe('railgun-engine', function test() {
     expect(balance).to.equal(value);
 
     await wallet.fullRedecryptBalancesAllTXIDVersions(chain, undefined);
-    await wallet.refreshPOIsForTXIDVersion(chain, txidVersion, true);
     const balanceRescan = await wallet.getBalanceERC20(txidVersion, chain, tokenAddress, [
       WalletBalanceBucket.Spendable,
     ]);
@@ -479,7 +339,6 @@ describe('railgun-engine', function test() {
       undefined, // progressCallback
       false, // deferCompletionEvent
     );
-    await wallet.refreshPOIsForTXIDVersion(chain, txidVersion, true);
     const balance = await wallet.getBalanceERC20(txidVersion, chain, tokenAddress, [
       WalletBalanceBucket.Spendable,
     ]);
@@ -492,7 +351,6 @@ describe('railgun-engine', function test() {
     expect(walletDetails.creationTreeHeight).to.equal(undefined);
 
     await wallet.fullRedecryptBalancesAllTXIDVersions(chain, undefined);
-    await wallet.refreshPOIsForTXIDVersion(chain, txidVersion, true);
     const balanceRescan = await wallet.getBalanceERC20(txidVersion, chain, tokenAddress, [
       WalletBalanceBucket.Spendable,
     ]);
@@ -511,7 +369,7 @@ describe('railgun-engine', function test() {
     expect(walletDetailsCleared.treeScannedHeights.length).to.equal(0);
   });
 
-  it('[HH] Should shield, unshield w/ broadcaster and update balance, generate POIs, and pull formatted spend/receive transaction history', async function run() {
+  it('[HH] Should shield, unshield w/ broadcaster and update balance, and pull formatted spend/receive transaction history', async function run() {
     if (!isDefined(process.env.RUN_HARDHAT_TESTS)) {
       this.skip();
       return;
@@ -523,7 +381,7 @@ describe('railgun-engine', function test() {
     expect(initialBalance).to.equal(undefined);
 
     const address = wallet.getAddress(chain);
-    const shield = await shieldTestTokens(address, BigInt(110000) * DECIMALS_18);
+    await shieldTestTokens(address, BigInt(110000) * DECIMALS_18);
 
     const balance = await wallet.getBalanceERC20(txidVersion, chain, tokenAddress, [
       WalletBalanceBucket.Spendable,
@@ -553,7 +411,7 @@ describe('railgun-engine', function test() {
       ),
     );
 
-    const { provedTransactions, preTransactionPOIsPerTxidLeafPerList } =
+    const { provedTransactions } =
       await transactionBatch.generateTransactions(
         engine.prover,
         wallet,
@@ -563,32 +421,13 @@ describe('railgun-engine', function test() {
         (progress: number, status: string) => {
           // console.log(progress, status);
         },
-        true, // shouldGeneratePreTransactionPOIs
       );
-
-    expect(Object.keys(preTransactionPOIsPerTxidLeafPerList).length).to.equal(1);
-    expect(Object.keys(preTransactionPOIsPerTxidLeafPerList[MOCK_LIST_KEY]).length).to.equal(1);
-
-    TestPOINodeInterface.overridePOIsListStatus = TXOPOIListStatus.Missing;
 
     const transact = await RailgunVersionedSmartContracts.generateTransact(
       txidVersion,
       chain,
       provedTransactions,
     );
-    const isValidPOI = await POIValidation.isValidSpendableTransaction(
-      txidVersion,
-      chain,
-      engine.prover,
-      transact,
-      false, // useRelayAdapt
-      isV2Test() ? config.contracts.proxy : config.contracts.poseidonMerkleVerifierV3,
-      preTransactionPOIsPerTxidLeafPerList,
-      wallet2.viewingKeyPair.privateKey,
-      wallet2.addressKeys,
-      new TokenDataGetter(engine.db),
-    );
-    expect(isValidPOI.isValid).to.equal(true, isValidPOI.error);
 
     const transactTx = await sendTransactionWithLatestNonce(ethersWallet, transact);
     const transactReceipt = await transactTx.wait();
@@ -608,97 +447,6 @@ describe('railgun-engine', function test() {
       ]);
     }
 
-    const shieldCommitment = ByteUtils.nToHex(
-      ShieldNote.getShieldNoteHash(
-        shield.notePublicKey,
-        shield.tokenHash,
-        BigInt('109725000000000000000000'), // Value after fee
-      ),
-      ByteLength.UINT_256,
-    );
-    const blindedCommitmentIn = BlindedCommitment.getForShieldOrTransact(
-      shieldCommitment,
-      shield.notePublicKey,
-      getGlobalTreePosition(0, 0),
-    );
-    expect(blindedCommitmentIn).to.equal(
-      '0x1add5dfd0299e9dc5af6fdfc0d86c0aaad29f9f9ca61674f67d3d185e28802e2',
-    );
-    const poiMerkleProofs = [blindedCommitmentIn].map(createDummyMerkleProof);
-
-    // Generate POI
-    await generateAndVerifyPOI(
-      shield,
-      transactReceipt,
-      provedTransactions,
-      {
-        anyRailgunTxidMerklerootAfterTransaction: isV2Test()
-          ? '1acb66807dbec43a6010729175e1e8535498ee8df8bda6113a170a78eb735f03'
-          : '09217a10c02a39bf7bf872b8339e5a4887111d12c1bbf95b6e70eb94ecea9554', // Different boundParamsHash for V3 changes the railgun txid
-        boundParamsHash: isV2Test()
-          ? '0357cc6d8af845f638fb6e2bdbf482f466d11454a2e31c69d9b7ec69ce8cd873'
-          : '1dd970dd3b73ae2309f8f8d0d6e7a1d5faf3fef61e48e00e5067d443c636d665', // Different boundParamsHash for V3 changes the railgun txid
-        commitmentsOut: [
-          '0x2c5acad8f41f95a2795997353f6cdb0838493cd5604f8ddc1859a468233e15ac',
-          '0x0c3f2e70ce66ea83593e26e7d13bd27a2a770920964786eaed95551b4ad51c4e',
-          '0x05b93bb7d3cd650232f233868e9a420f08031029720f69df51dd04c6b7e5bd70',
-        ],
-        npksOut: [
-          2800314339815912641032015410982157821342520564864853273055282304996901162130n,
-          11534906831940272621633961845961479374350832633003460590301493842374950642962n,
-        ],
-        nullifiers: ['0x05802951a46d9e999151eb0eb9e4c7c1260b7ee88539011c207dc169c4dd17ee'],
-        nullifyingKey:
-          8368299126798249740586535953124199418524409103803955764525436743456763691384n,
-        railgunTxidMerkleProofIndices:
-          '0000000000000000000000000000000000000000000000000000000000000000',
-        railgunTxidMerkleProofPathElements: [
-          '0488f89b25bc7011eaf6a5edce71aeafb9fe706faa3c0a5cd9cbe868ae3b9ffc',
-          '01c405064436affeae1fc8e30b2e417b4243bbb819adca3b55bb32efc3e43a4f',
-          '0888d37652d10d1781db54b70af87b42a2916e87118f507218f9a42a58e85ed2',
-          '183f531ead7217ebc316b4c02a2aad5ad87a1d56d4fb9ed81bf84f644549eaf5',
-          '093c48f1ecedf2baec231f0af848a57a76c6cf05b290a396707972e1defd17df',
-          '1437bb465994e0453357c17a676b9fdba554e215795ebc17ea5012770dfb77c7',
-          '12359ef9572912b49f44556b8bbbfa69318955352f54cfa35cb0f41309ed445a',
-          '2dc656dadc82cf7a4707786f4d682b0f130b6515f7927bde48214d37ec25a46c',
-          '2500bdfc1592791583acefd050bc439a87f1d8e8697eb773e8e69b44973e6fdc',
-          '244ae3b19397e842778b254cd15c037ed49190141b288ff10eb1390b34dc2c31',
-          '0ca2b107491c8ca6e5f7e22403ea8529c1e349a1057b8713e09ca9f5b9294d46',
-          '18593c75a9e42af27b5e5b56b99c4c6a5d7e7d6e362f00c8e3f69aeebce52313',
-          '17aca915b237b04f873518947a1f440f0c1477a6ac79299b3be46858137d4bfb',
-          '2726c22ad3d9e23414887e8233ee83cc51603f58c48a9c9e33cb1f306d4365c0',
-          '08c5bd0f85cef2f8c3c1412a2b69ee943c6925ecf79798bb2b84e1b76d26871f',
-          '27f7c465045e0a4d8bec7c13e41d793734c50006ca08920732ce8c3096261435',
-        ],
-        randomsIn: ['67c600e777b86d3a1e72a53092e9fe85'],
-        spendingPublicKey: [
-          15684838006997671713939066069845237677934334329285343229142447933587909549584n,
-          11878614856120328179849762231924033298788609151532558727282528569229552954628n,
-        ],
-        token: '0000000000000000000000009fe46736679d2d9a65f0992f2272de9f3c7fa6e0',
-        utxoPositionsIn: [0],
-        utxoTreeIn: 0,
-        utxoBatchGlobalStartPositionOut: 1n,
-        railgunTxidIfHasUnshield: isV2Test()
-          ? '0x0fefd169291c1deec2affa8dcbfbee4a4bbeddfc3b5723c031665ba631725c62'
-          : '0x13503684af5d4dd47b61d45f4dd918e4e1952bc976631feb8f752e65fd6555ed', // Different boundParamsHash for V3 changes the railgun txid
-        valuesIn: [109725000000000000000000n],
-        valuesOut: [1n, 109424999999999999999999n],
-        poiMerkleroots: poiMerkleProofs.map((proof) => proof.root),
-        poiInMerkleProofIndices: poiMerkleProofs.map((proof) => proof.indices),
-        poiInMerkleProofPathElements: poiMerkleProofs.map((proof) => proof.elements),
-      },
-      MOCK_LIST_KEY,
-      [
-        '0x009496b785d48f34983bd248bbf0c0b12bba749689c017d9d016493b419f0571',
-        '0x2d1e5b80789879000d35b3bf7028247dc62c0dbabf736264f9d71a6421f008da',
-      ],
-    );
-
-    TestPOINodeInterface.overridePOIsListStatus = TXOPOIListStatus.Valid;
-    await wallet.refreshPOIsForTXIDVersion(chain, txidVersion, true);
-    await wallet2.refreshPOIsForTXIDVersion(chain, txidVersion, true);
-
     // BALANCE = shielded amount - 300(decimals) - 1
     const newBalance = await wallet.getBalanceERC20(txidVersion, chain, tokenAddress, [
       WalletBalanceBucket.Spendable,
@@ -709,14 +457,6 @@ describe('railgun-engine', function test() {
       WalletBalanceBucket.Spendable,
     ]);
     expect(newBalance2).to.equal(BigInt(1));
-
-    // check if broadcaster wallet finds valid POI for received commitment
-    const hasValidBroadcasterPOI = await wallet2.receiveCommitmentHasValidPOI(
-      txidVersion,
-      chain,
-      '0x2c5acad8f41f95a2795997353f6cdb0838493cd5604f8ddc1859a468233e15ac',
-    );
-    expect(hasValidBroadcasterPOI).to.equal(true);
 
     // check the transactions log
     const history = await wallet.getTransactionHistory(chain, undefined);
@@ -746,7 +486,6 @@ describe('railgun-engine', function test() {
         senderAddress: undefined,
         shieldFee: '275000000000000000000',
         balanceBucket: WalletBalanceBucket.Spent,
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(history[0].transferTokenAmounts).deep.eq([]);
@@ -771,7 +510,6 @@ describe('railgun-engine', function test() {
       outputType: OutputType.BroadcasterFee,
       walletSource: 'test wallet',
       memoText: undefined,
-      hasValidPOIForActiveLists: true,
     });
     expect(history[1].changeTokenAmounts).deep.eq([
       {
@@ -781,7 +519,6 @@ describe('railgun-engine', function test() {
         outputType: OutputType.Change,
         walletSource: 'test wallet',
         memoText: undefined,
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(history[1].unshieldTokenAmounts).deep.eq([
@@ -793,7 +530,6 @@ describe('railgun-engine', function test() {
         memoText: undefined,
         senderAddress: undefined,
         unshieldFee: '750000000000000000',
-        hasValidPOIForActiveLists: true,
       },
     ]);
 
@@ -802,7 +538,7 @@ describe('railgun-engine', function test() {
     expect(historyHighStartingBlock.length).to.equal(0);
   }).timeout(90000);
 
-  it('[HH] Should shield, max-unshield without broadcaster, generate POIs, and pull formatted spend/receive transaction history', async function run() {
+  it('[HH] Should shield, max-unshield without broadcaster, and pull formatted spend/receive transaction history', async function run() {
     if (!isDefined(process.env.RUN_HARDHAT_TESTS)) {
       this.skip();
       return;
@@ -814,7 +550,7 @@ describe('railgun-engine', function test() {
     expect(initialBalance).to.equal(undefined);
 
     const address = wallet.getAddress(chain);
-    const shield = await shieldTestTokens(address, BigInt(110000) * DECIMALS_18);
+    await shieldTestTokens(address, BigInt(110000) * DECIMALS_18);
 
     const balance = await wallet.getBalanceERC20(txidVersion, chain, tokenAddress, [
       WalletBalanceBucket.Spendable,
@@ -831,42 +567,23 @@ describe('railgun-engine', function test() {
       tokenData,
     });
 
-    const { provedTransactions, preTransactionPOIsPerTxidLeafPerList } =
+    const { provedTransactions } =
       await transactionBatch.generateTransactions(
         engine.prover,
         wallet,
         txidVersion,
         testEncryptionKey,
         () => {},
-        true, // shouldGeneratePreTransactionPOIs
       );
     expect(provedTransactions.length).to.equal(1);
     expect(provedTransactions[0].nullifiers.length).to.equal(1);
     expect(provedTransactions[0].commitments.length).to.equal(1);
-
-    TestPOINodeInterface.overridePOIsListStatus = TXOPOIListStatus.Missing;
 
     const transact = await RailgunVersionedSmartContracts.generateTransact(
       txidVersion,
       chain,
       provedTransactions,
     );
-
-    const isValidPOI = await POIValidation.isValidSpendableTransaction(
-      txidVersion,
-      chain,
-      engine.prover,
-      transact,
-      false, // useRelayAdapt
-      isV2Test() ? config.contracts.proxy : config.contracts.poseidonMerkleVerifierV3,
-      preTransactionPOIsPerTxidLeafPerList,
-      wallet2.viewingKeyPair.privateKey,
-      wallet2.addressKeys,
-      new TokenDataGetter(engine.db),
-    );
-    // Not valid as there are no commitments generated -
-    // it should never generate pre-transaction pois without a broadcaster in production.
-    expect(isValidPOI.isValid).to.equal(false);
 
     const transactTx = await sendTransactionWithLatestNonce(ethersWallet, transact);
     const [transactReceipt] = await Promise.all([
@@ -881,84 +598,6 @@ describe('railgun-engine', function test() {
       WalletBalanceBucket.Spendable,
     ]);
     expect(newBalance).to.equal(0n, 'Failed to receive expected balance');
-
-    const shieldCommitment = ByteUtils.nToHex(
-      ShieldNote.getShieldNoteHash(
-        shield.notePublicKey,
-        shield.tokenHash,
-        BigInt('109725000000000000000000'), // Value after fee
-      ),
-      ByteLength.UINT_256,
-    );
-    const blindedCommitmentIn = BlindedCommitment.getForShieldOrTransact(
-      shieldCommitment,
-      shield.notePublicKey,
-      getGlobalTreePosition(0, 0),
-    );
-    expect(blindedCommitmentIn).to.equal(
-      '0x1add5dfd0299e9dc5af6fdfc0d86c0aaad29f9f9ca61674f67d3d185e28802e2',
-    );
-    const poiMerkleProofs = [blindedCommitmentIn].map(createDummyMerkleProof);
-
-    // Generate POI
-    await generateAndVerifyPOI(
-      shield,
-      transactReceipt,
-      provedTransactions,
-      {
-        anyRailgunTxidMerklerootAfterTransaction: isV2Test()
-          ? '1e0686c74d3624ab47c4b8fd3332061d0f3ee903fce1d8f51c60e7ac1f85a67f'
-          : '2f8312d4131b33970140a146a794756005fe6e7a82b6269a67fa3993696ddac7', // Different boundParamsHash for V3 changes the railgun txid
-        boundParamsHash: isV2Test()
-          ? '0a4e7bed8287c629fd064665543dc71fdc09b0ab9df7d556f24a1f2f9f018dc7'
-          : '0b05c971480da7dd72a99a0f65b77a3776cc6a0f6070f69530b046ef6c37ea90', // Different boundParamsHash for V3
-        commitmentsOut: ['0x007aaf0cbee05066820873170e293e44df6766c29da69ac46fd05d4ff2c0a225'],
-        npksOut: [],
-        nullifiers: ['0x05802951a46d9e999151eb0eb9e4c7c1260b7ee88539011c207dc169c4dd17ee'],
-        nullifyingKey:
-          8368299126798249740586535953124199418524409103803955764525436743456763691384n,
-        railgunTxidMerkleProofIndices:
-          '0000000000000000000000000000000000000000000000000000000000000000',
-        railgunTxidMerkleProofPathElements: [
-          '0488f89b25bc7011eaf6a5edce71aeafb9fe706faa3c0a5cd9cbe868ae3b9ffc',
-          '01c405064436affeae1fc8e30b2e417b4243bbb819adca3b55bb32efc3e43a4f',
-          '0888d37652d10d1781db54b70af87b42a2916e87118f507218f9a42a58e85ed2',
-          '183f531ead7217ebc316b4c02a2aad5ad87a1d56d4fb9ed81bf84f644549eaf5',
-          '093c48f1ecedf2baec231f0af848a57a76c6cf05b290a396707972e1defd17df',
-          '1437bb465994e0453357c17a676b9fdba554e215795ebc17ea5012770dfb77c7',
-          '12359ef9572912b49f44556b8bbbfa69318955352f54cfa35cb0f41309ed445a',
-          '2dc656dadc82cf7a4707786f4d682b0f130b6515f7927bde48214d37ec25a46c',
-          '2500bdfc1592791583acefd050bc439a87f1d8e8697eb773e8e69b44973e6fdc',
-          '244ae3b19397e842778b254cd15c037ed49190141b288ff10eb1390b34dc2c31',
-          '0ca2b107491c8ca6e5f7e22403ea8529c1e349a1057b8713e09ca9f5b9294d46',
-          '18593c75a9e42af27b5e5b56b99c4c6a5d7e7d6e362f00c8e3f69aeebce52313',
-          '17aca915b237b04f873518947a1f440f0c1477a6ac79299b3be46858137d4bfb',
-          '2726c22ad3d9e23414887e8233ee83cc51603f58c48a9c9e33cb1f306d4365c0',
-          '08c5bd0f85cef2f8c3c1412a2b69ee943c6925ecf79798bb2b84e1b76d26871f',
-          '27f7c465045e0a4d8bec7c13e41d793734c50006ca08920732ce8c3096261435',
-        ],
-        randomsIn: ['67c600e777b86d3a1e72a53092e9fe85'],
-        spendingPublicKey: [
-          15684838006997671713939066069845237677934334329285343229142447933587909549584n,
-          11878614856120328179849762231924033298788609151532558727282528569229552954628n,
-        ],
-        token: '0000000000000000000000009fe46736679d2d9a65f0992f2272de9f3c7fa6e0',
-        utxoPositionsIn: [0],
-        utxoTreeIn: 0,
-        utxoBatchGlobalStartPositionOut: 6553634463n,
-        railgunTxidIfHasUnshield: isV2Test()
-          ? '0x018d6143a22e09c18ba2a713985bd1e43a095605d5d259d72d96da2cca604f3e'
-          : '0x10644a92c657247132672228f58ed005c274552f07e78787000745d7661a1098', // Different boundParamsHash for V3 changes the railgun txid
-        valuesIn: [109725000000000000000000n],
-        valuesOut: [],
-        poiMerkleroots: poiMerkleProofs.map((proof) => proof.root),
-        poiInMerkleProofIndices: poiMerkleProofs.map((proof) => proof.indices),
-        poiInMerkleProofPathElements: poiMerkleProofs.map((proof) => proof.elements),
-      },
-      MOCK_LIST_KEY,
-      [],
-      true, // isUnshieldOnly
-    );
 
     // check the transactions log
     const history = await wallet.getTransactionHistory(chain, undefined);
@@ -988,7 +627,6 @@ describe('railgun-engine', function test() {
         senderAddress: undefined,
         shieldFee: '275000000000000000000',
         balanceBucket: WalletBalanceBucket.Spent,
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(history[0].transferTokenAmounts).deep.eq([]);
@@ -1014,7 +652,6 @@ describe('railgun-engine', function test() {
         memoText: undefined,
         senderAddress: undefined,
         unshieldFee: '274312500000000000000',
-        hasValidPOIForActiveLists: false,
       },
     ]);
   }).timeout(120000);
@@ -1074,36 +711,19 @@ describe('railgun-engine', function test() {
       ),
     );
 
-    TestPOINodeInterface.overridePOIsListStatus = TXOPOIListStatus.Missing;
-
-    const { provedTransactions, preTransactionPOIsPerTxidLeafPerList } =
+    const { provedTransactions } =
       await transactionBatch.generateTransactions(
         engine.prover,
         wallet,
         txidVersion,
         testEncryptionKey,
         () => {},
-        true, // shouldGeneratePreTransactionPOIs
       );
     const transact = await RailgunVersionedSmartContracts.generateTransact(
       txidVersion,
       chain,
       provedTransactions,
     );
-
-    const isValidPOI = await POIValidation.isValidSpendableTransaction(
-      txidVersion,
-      chain,
-      engine.prover,
-      transact,
-      false, // useRelayAdapt
-      isV2Test() ? config.contracts.proxy : config.contracts.poseidonMerkleVerifierV3,
-      preTransactionPOIsPerTxidLeafPerList,
-      wallet2.viewingKeyPair.privateKey,
-      wallet2.addressKeys,
-      new TokenDataGetter(engine.db),
-    );
-    expect(isValidPOI.isValid).to.equal(true, isValidPOI.error);
 
     const transactTx = await sendTransactionWithLatestNonce(ethersWallet, transact);
     await transactTx.wait();
@@ -1118,9 +738,6 @@ describe('railgun-engine', function test() {
         promiseTimeout(awaitScan(wallet2, chain), 15000, 'Timed out wallet2 scan'),
       ]);
     }
-    TestPOINodeInterface.overridePOIsListStatus = TXOPOIListStatus.Valid;
-    await wallet.refreshPOIsForTXIDVersion(chain, txidVersion, true);
-    await wallet2.refreshPOIsForAllTXIDVersions(chain, true);
 
     // BALANCE = shielded amount - 300(decimals) - 1
     const newBalance = await wallet.getBalanceERC20(txidVersion, chain, tokenAddress, [
@@ -1150,7 +767,6 @@ describe('railgun-engine', function test() {
         senderAddress: undefined,
         shieldFee: '275000000000000000000',
         balanceBucket: WalletBalanceBucket.Spent,
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(history[0].transferTokenAmounts).deep.eq([]);
@@ -1175,7 +791,6 @@ describe('railgun-engine', function test() {
         recipientAddress: wallet2.getAddress(),
         memoText,
         // eslint-disable-next-line no-unneeded-ternary
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(history[1].broadcasterFeeTokenAmount).deep.eq({
@@ -1187,7 +802,6 @@ describe('railgun-engine', function test() {
       walletSource: 'test wallet',
       memoText: broadcasterMemoText,
       // eslint-disable-next-line no-unneeded-ternary
-      hasValidPOIForActiveLists: true,
     });
     expect(history[1].changeTokenAmounts).deep.eq([
       {
@@ -1198,7 +812,6 @@ describe('railgun-engine', function test() {
         walletSource: 'test wallet',
         memoText: undefined,
         // eslint-disable-next-line no-unneeded-ternary
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(history[1].unshieldTokenAmounts).deep.eq([]);
@@ -1214,7 +827,6 @@ describe('railgun-engine', function test() {
         senderAddress: wallet.getAddress(),
         shieldFee: undefined,
         balanceBucket: WalletBalanceBucket.Spendable,
-        hasValidPOIForActiveLists: true,
       },
       {
         tokenData: getTokenDataERC20(tokenAddress),
@@ -1224,7 +836,6 @@ describe('railgun-engine', function test() {
         senderAddress: undefined,
         shieldFee: undefined,
         balanceBucket: WalletBalanceBucket.Spendable,
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(history2[0].transferTokenAmounts).deep.eq([]);
@@ -1272,7 +883,6 @@ describe('railgun-engine', function test() {
         senderAddress: undefined,
         shieldFee: isV2Test() ? undefined : '0',
         balanceBucket: WalletBalanceBucket.Spendable,
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(history[0].transferTokenAmounts).deep.eq([]);
@@ -1337,38 +947,20 @@ describe('railgun-engine', function test() {
       ),
     );
 
-    const { provedTransactions, preTransactionPOIsPerTxidLeafPerList } =
+    const { provedTransactions } =
       await transactionBatch.generateTransactions(
         engine.prover,
         wallet,
         txidVersion,
         testEncryptionKey,
         () => {},
-        true, // shouldGeneratePreTransactionPOIs
       );
-
-    expect(Object.keys(preTransactionPOIsPerTxidLeafPerList).length).to.equal(1);
-    expect(Object.keys(preTransactionPOIsPerTxidLeafPerList[MOCK_LIST_KEY]).length).to.equal(3);
 
     const transact = await RailgunVersionedSmartContracts.generateTransact(
       txidVersion,
       chain,
       provedTransactions,
     );
-
-    const isValidPOI = await POIValidation.isValidSpendableTransaction(
-      txidVersion,
-      chain,
-      engine.prover,
-      transact,
-      false, // useRelayAdapt
-      isV2Test() ? config.contracts.proxy : config.contracts.poseidonMerkleVerifierV3,
-      preTransactionPOIsPerTxidLeafPerList,
-      wallet2.viewingKeyPair.privateKey,
-      wallet2.addressKeys,
-      new TokenDataGetter(engine.db),
-    );
-    expect(isValidPOI.isValid).to.equal(true, isValidPOI.error);
 
     const transactTx = await sendTransactionWithLatestNonce(ethersWallet, transact);
 
@@ -1384,8 +976,6 @@ describe('railgun-engine', function test() {
         promiseTimeout(awaitScan(wallet2, chain), 15000, 'Timed out wallet2 scan'),
       ]);
     }
-    await wallet.refreshPOIsForTXIDVersion(chain, txidVersion, true);
-    await wallet2.refreshPOIsForAllTXIDVersions(chain, true);
 
     const historyAfterTransfer = await wallet.getTransactionHistory(chain, undefined);
     expect(historyAfterTransfer.length).to.equal(4);
@@ -1406,7 +996,6 @@ describe('railgun-engine', function test() {
         walletSource: 'test wallet',
         recipientAddress: wallet2.getAddress(),
         memoText,
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(historyAfterTransfer[3].broadcasterFeeTokenAmount).deep.eq({
@@ -1416,7 +1005,6 @@ describe('railgun-engine', function test() {
       outputType: OutputType.BroadcasterFee,
       walletSource: 'test wallet',
       memoText: broadcasterMemoText,
-      hasValidPOIForActiveLists: true,
     });
     expect(historyAfterTransfer[3].changeTokenAmounts).deep.eq([
       {
@@ -1426,7 +1014,6 @@ describe('railgun-engine', function test() {
         outputType: OutputType.Change,
         walletSource: 'test wallet',
         memoText: undefined,
-        hasValidPOIForActiveLists: true,
       },
     ]);
     expect(historyAfterTransfer[3].unshieldTokenAmounts).deep.eq([
@@ -1438,8 +1025,6 @@ describe('railgun-engine', function test() {
         memoText: undefined,
         senderAddress: undefined,
         unshieldFee: '0',
-        // eslint-disable-next-line no-unneeded-ternary
-        hasValidPOIForActiveLists: isV2Test() ? false : true,
       },
     ]);
   }).timeout(300_000);
@@ -1517,7 +1102,6 @@ describe('railgun-engine', function test() {
     transactSenderRandomStub?.restore();
     aesGetRandomIVStub?.restore();
     xChaChaGetRandomIVStub?.restore();
-    poiGetListsCanGenerateSpentPOIsStub?.restore();
 
     await engine?.unload();
   });

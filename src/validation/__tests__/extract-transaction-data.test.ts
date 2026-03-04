@@ -2,7 +2,7 @@ import chai from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import { groth16 } from 'snarkjs';
 import memdown from 'memdown';
-import { TXIDVersion, TXOPOIListStatus } from '../../models/poi-types';
+import { TXIDVersion } from '../../models/poi-types';
 import { RailgunEngine } from '../../railgun-engine';
 import { RailgunWallet } from '../../wallet/railgun-wallet';
 import { AddressData } from '../../key-derivation/bech32';
@@ -36,7 +36,6 @@ import {
   createEngineWalletBalancesStub,
   restoreEngineStubs,
 } from '../../test/engine-stubs.test';
-import { TestPOINodeInterface } from '../../test/test-poi-node-interface.test';
 import { TokenDataGetter } from '../../token/token-data-getter';
 import { RailgunVersionedSmartContracts } from '../../contracts/railgun-smart-wallet/railgun-versioned-smart-contracts';
 import { isDefined } from '../../utils/is-defined';
@@ -64,9 +63,6 @@ describe('extract-transaction-data', () => {
     fee: bigint,
     tokenAddress: string,
   ): Promise<(TransactionStructV2 | TransactionStructV3)[]> => {
-    // Force refresh POIs to be Valid, so balance is Spendable (see beforeEach)
-    await railgunWallet.refreshPOIsForAllTXIDVersions(chain, true);
-
     const transaction = new TransactionBatch(chain);
     transaction.addOutput(
       TransactNote.createTransfer(
@@ -169,13 +165,6 @@ describe('extract-transaction-data', () => {
     );
   });
 
-  beforeEach(() => {
-    TestPOINodeInterface.overridePOIsListStatus = TXOPOIListStatus.Valid;
-  });
-
-  afterEach(() => {
-    TestPOINodeInterface.overridePOIsListStatus = TXOPOIListStatus.Missing;
-  });
 
   it('[V2] Should extract railgun transaction data', async function run() {
     if (!isV2Test()) {

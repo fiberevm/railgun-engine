@@ -218,7 +218,6 @@ export class V2Events {
       blockNumber,
       eventLogIndex,
       railgunTxid: undefined,
-      poisPerList: undefined,
     };
   }
 

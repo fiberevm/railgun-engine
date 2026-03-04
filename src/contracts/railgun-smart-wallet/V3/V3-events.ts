@@ -39,7 +39,7 @@ import { getRailgunTransactionIDHex } from '../../../transaction/railgun-txid';
 import {
   GLOBAL_UTXO_POSITION_UNSHIELD_EVENT_HARDCODED_VALUE,
   GLOBAL_UTXO_TREE_UNSHIELD_EVENT_HARDCODED_VALUE,
-} from '../../../poi/global-tree-position';
+} from '../../../utils/global-tree-position';
 
 export class V3Events {
   static formatTransactEvent(
@@ -164,7 +164,6 @@ export class V3Events {
       blockNumber,
       eventLogIndex: transactIndex,
       railgunTxid,
-      poisPerList: undefined,
       timestamp: undefined,
     };
   }

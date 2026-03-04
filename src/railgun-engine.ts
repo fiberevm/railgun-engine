@@ -66,7 +66,6 @@ import {
 } from './models/poi-types';
 import { getTokenDataHash, getUnshieldTokenHash } from './note/note-util';
 import { UnshieldNote } from './note';
-import { POI } from './poi';
 import { PoseidonMerkleAccumulatorContract } from './contracts/railgun-smart-wallet/V3/poseidon-merkle-accumulator';
 import { PoseidonMerkleVerifierContract } from './contracts/railgun-smart-wallet/V3/poseidon-merkle-verifier';
 import { TokenVaultContract } from './contracts/railgun-smart-wallet/V3/token-vault-contract';
@@ -101,8 +100,6 @@ class RailgunEngine extends EventEmitter {
 
   private readonly hasSyncedRailgunTransactionsV2: Registry<boolean> = new Registry();
 
-  readonly isPOINode: boolean;
-
   private constructor(
     walletSource: string,
     leveldown: AbstractLevelDOWN,
@@ -113,7 +110,6 @@ class RailgunEngine extends EventEmitter {
     getLatestValidatedRailgunTxid: Optional<GetLatestValidatedRailgunTxid>,
     engineDebugger: Optional<EngineDebugger>,
     skipMerkletreeScans: boolean,
-    isPOINode: boolean,
   ) {
     super();
 
@@ -133,7 +129,6 @@ class RailgunEngine extends EventEmitter {
     }
 
     this.skipMerkletreeScans = skipMerkletreeScans;
-    this.isPOINode = isPOINode;
   }
 
   /**
@@ -144,7 +139,6 @@ class RailgunEngine extends EventEmitter {
    * @param quickSync - quick sync function to speed up sync
    * @param engineDebugger - log and error callbacks for verbose logging
    * @param skipMerkletreeScans - whether to skip UTXO merkletree scans - useful for shield-only interfaces without Railgun wallets.
-   * @param isPOINode - run as POI node with full Railgun Txid merkletrees. set to false for all wallet implementations.
    */
   static async initForWallet(
     walletSource: string,
@@ -169,30 +163,6 @@ class RailgunEngine extends EventEmitter {
       getLatestValidatedRailgunTxid,
       engineDebugger,
       skipMerkletreeScans,
-      false, // isPOINode
-    );
-  }
-
-  static async initForPOINode(
-    leveldown: AbstractLevelDOWN,
-    artifactGetter: ArtifactGetter,
-    quickSyncEvents: QuickSyncEvents,
-    quickSyncRailgunTransactionsV2: QuickSyncRailgunTransactionsV2,
-    engineDebugger: Optional<EngineDebugger>,
-  ) {
-    await initPoseidonPromise;
-    await initCurve25519Promise;
-    return new RailgunEngine(
-      'poinode',
-      leveldown,
-      artifactGetter,
-      quickSyncEvents,
-      quickSyncRailgunTransactionsV2,
-      undefined, // validateRailgunTxidMerkleroot
-      undefined, // getLatestValidatedRailgunTxid
-      engineDebugger,
-      false, // skipMerkletreeScans
-      true, // isPOINode
     );
   }
 
@@ -259,10 +229,7 @@ class RailgunEngine extends EventEmitter {
     scanCount: number = 0,
   ): Promise<void> {
     // Delay and then trigger a Railgun Txid Merkletree sync.
-    if (this.isPOINode) {
-      // POI node should scan faster because POI node is the data source for wallets
-      await delay(3000);
-    } else if (scanCount === 0) {
+    if (scanCount === 0) {
       // Delay for 10 seconds on first scan for wallet
       await delay(10000);
     } else {
@@ -899,10 +866,6 @@ class RailgunEngine extends EventEmitter {
     txidVersion: TXIDVersion,
     chain: Chain,
   ): Promise<Optional<number>> {
-    if (this.isPOINode) {
-      return undefined;
-    }
-
     // TODO: Optimization - use this merkleroot from validated railgun txid to auto-validate merkletree.
     const { txidIndex: latestValidatedTxidIndex /* merkleroot */ } =
       await this.getLatestValidatedRailgunTxid(txidVersion, chain);
@@ -975,7 +938,7 @@ class RailgunEngine extends EventEmitter {
         // Only scan wallets if utxoMerkletree is not currently scanning
         const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
         if (!utxoMerkletree.isScanning) {
-          // Decrypt balances for all wallets - kicks off a POI refresh.
+          // Decrypt balances for all wallets.
           await this.decryptBalancesAllWallets(
             txidVersion,
             chain,
@@ -1012,15 +975,10 @@ class RailgunEngine extends EventEmitter {
     endScanPercentage: number,
   ) {
     const latestValidatedTxidIndex = await this.getLatestValidatedTxidIndex(txidVersion, chain);
-    // Log chain.id, txidVersion, and if not a POI node, the latest validated txid index.
     EngineDebug.log(
       `syncing railgun transactions to validated index (Chain: ${
         chain.id
-      }. txidVersion: ${txidVersion}): ${
-        this.isPOINode
-          ? 'POI Node: getLatestValidatedTxidIndex() skipped'
-          : latestValidatedTxidIndex ?? 'NOT FOUND'
-      }`,
+      }. txidVersion: ${txidVersion}): ${latestValidatedTxidIndex ?? 'NOT FOUND'}`,
     );
 
     const shouldAddNewRailgunTransactions = await this.shouldAddNewRailgunTransactions(
@@ -1112,7 +1070,6 @@ class RailgunEngine extends EventEmitter {
             railgunTxid,
             timestamp,
             eventLogIndex: undefined, // Does not exist for txid subgraph, which is generated through calldata
-            poisPerList: undefined,
           };
 
           // eslint-disable-next-line no-await-in-loop
@@ -1309,7 +1266,6 @@ class RailgunEngine extends EventEmitter {
   private async clearTXIDMerkletree(txidVersion: TXIDVersion, chain: Chain) {
     const txidMerkletree = this.getTXIDMerkletree(txidVersion, chain);
     await txidMerkletree.clearDataForMerkletree();
-    txidMerkletree.savedPOILaunchSnapshot = false;
   }
 
   /**
@@ -1415,7 +1371,6 @@ class RailgunEngine extends EventEmitter {
     txidMerkletree.isScanning = true; // Don't allow scans while removing leaves.
     // eslint-disable-next-line no-await-in-loop
     await txidMerkletree.clearDataForMerkletree();
-    txidMerkletree.savedPOILaunchSnapshot = false;
     txidMerkletree.isScanning = false; // Clear before calling syncRailgunTransactions.
     // eslint-disable-next-line no-await-in-loop
 
@@ -1475,7 +1430,6 @@ class RailgunEngine extends EventEmitter {
     defaultProvider: PollingJsonRpcProvider | FallbackProvider,
     pollingProvider: PollingJsonRpcProvider,
     deploymentBlocks: Record<TXIDVersion, number>,
-    poiLaunchBlock: Optional<number>,
     supportsV3: boolean,
   ) {
     EngineDebug.log(`loadNetwork: ${chain.type}:${chain.id}`);
@@ -1605,44 +1559,21 @@ class RailgunEngine extends EventEmitter {
         }),
       );
 
-      let txidMerkletree: Optional<TXIDMerkletree>;
+      const autoValidate = async () => true;
 
-      if (isDefined(poiLaunchBlock) || supportsV3) {
-        if (isDefined(poiLaunchBlock)) {
-          POI.launchBlocks.set(null, chain, poiLaunchBlock);
-        }
+      // eslint-disable-next-line no-await-in-loop
+      const txidMerkletree = await TXIDMerkletree.createForWallet(
+        this.db,
+        chain,
+        txidVersion,
+        // For V3, we receive events in realtime, and validation is done via on-chain verificationHash field.
+        supportsV3 ? autoValidate : this.validateRailgunTxidMerkleroot,
+      );
+      this.txidMerkletrees.set(txidVersion, chain, txidMerkletree);
 
-        if (this.isPOINode) {
-          // POI Node Txid merkletree
-          // eslint-disable-next-line no-await-in-loop
-          txidMerkletree = await TXIDMerkletree.createForPOINode(this.db, chain, txidVersion);
-          this.txidMerkletrees.set(txidVersion, chain, txidMerkletree);
-        } else {
-          // Wallet Txid merkletree
-
-          // TODO-V3: If the poiLaunchBlock is newly set, old TXID merkletrees may not set the correct snapshot.
-          // Make sure to clear the TXID merkletree when poiLaunchBlock is first set for this chain.
-          // (Store the poiLaunchBlock in the TXID Merkletree db).
-
-          const autoValidate = async () => true;
-
-          // eslint-disable-next-line no-await-in-loop
-          txidMerkletree = await TXIDMerkletree.createForWallet(
-            this.db,
-            chain,
-            txidVersion,
-            // For V3, we receive events in realtime, and validation is done via on-chain verificationHash field.
-            supportsV3 ? autoValidate : this.validateRailgunTxidMerkleroot,
-          );
-          this.txidMerkletrees.set(txidVersion, chain, txidMerkletree);
-        }
-
-        if (isDefined(txidMerkletree)) {
-          // Load txid merkletree to all wallets
-          for (const wallet of Object.values(this.wallets)) {
-            wallet.loadRailgunTXIDMerkletree(txidVersion, txidMerkletree);
-          }
-        }
+      // Load txid merkletree to all wallets
+      for (const wallet of Object.values(this.wallets)) {
+        wallet.loadRailgunTXIDMerkletree(txidVersion, txidMerkletree);
       }
 
       this.deploymentBlocks.set(txidVersion, chain, deploymentBlocks[txidVersion]);

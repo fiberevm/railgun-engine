@@ -2,7 +2,7 @@ import { poseidon } from '../utils/poseidon';
 import { RailgunTransaction, RailgunTransactionWithHash } from '../models/formatted-types';
 import { ByteLength, ByteUtils } from '../utils/bytes';
 import { MERKLE_ZERO_VALUE_BIGINT } from '../models/merkletree-types';
-import { getGlobalTreePosition } from '../poi/global-tree-position';
+import { getGlobalTreePosition } from '../utils/global-tree-position';
 import { keccak256 } from '../utils/hash';
 
 const padWithZerosToMax = (array: bigint[], max: number): bigint[] => {

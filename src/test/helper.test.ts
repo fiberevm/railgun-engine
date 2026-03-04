@@ -57,24 +57,9 @@ const assertTestNodeArtifactExists = (nullifiers: number, commitments: number): 
   }
 };
 
-const testNodeArtifactGetterPOI = async (
-  maxInputs: number,
-  maxOutputs: number,
-): Promise<Artifact> => {
-  try {
-    return {
-      ...artifacts.getArtifactsPOI(maxInputs, maxOutputs),
-      dat: undefined,
-    };
-  } catch (err) {
-    throw new Error(`Could not find lite artifact for tests: POI`);
-  }
-};
-
 export const testArtifactsGetter: ArtifactGetter = {
   getArtifacts: testNodeArtifactGetter,
   assertArtifactExists: assertTestNodeArtifactExists,
-  getArtifactsPOI: testNodeArtifactGetterPOI,
 };
 
 export const mockQuickSyncEvents: QuickSyncEvents = (
