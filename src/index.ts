@@ -9,6 +9,7 @@ export {
   SpendingKeyPair,
   SpendingPublicKey,
   ViewingKeyPair,
+  deriveNodes,
 } from './key-derivation';
 export * from './merkletree/merkletree';
 export * from './validation';

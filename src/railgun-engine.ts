@@ -7,7 +7,8 @@ import { Database, DatabaseNamespace } from './database/database';
 import { Prover } from './prover/prover';
 import { encodeAddress, decodeAddress } from './key-derivation/bech32';
 import { ByteLength, ByteUtils } from './utils/bytes';
-import { RailgunWallet } from './wallet/railgun-wallet';
+import { RailgunWallet, DelegatedSignWallet, SignDelegate } from './wallet/railgun-wallet';
+import { SpendingPublicKey, ViewingKeyPair } from './key-derivation/wallet-node';
 import EngineDebug from './debugger/debugger';
 import { Chain, EngineDebugger } from './models/engine-types';
 import {
@@ -2055,6 +2056,26 @@ class RailgunEngine extends EventEmitter {
       shareableViewingKey,
       creationBlockNumbers,
       this.prover,
+    );
+    await this.loadWallet(wallet);
+    return wallet;
+  }
+
+  async createWalletFromKeys(
+    encryptionKey: string,
+    viewingKeyPair: ViewingKeyPair,
+    spendingPublicKey: SpendingPublicKey,
+    creationBlockNumbers: Optional<number[][]>,
+    signDelegate: SignDelegate,
+  ): Promise<DelegatedSignWallet> {
+    const wallet = await DelegatedSignWallet.fromKeys(
+      this.db,
+      encryptionKey,
+      viewingKeyPair,
+      spendingPublicKey,
+      creationBlockNumbers,
+      this.prover,
+      signDelegate,
     );
     await this.loadWallet(wallet);
     return wallet;
