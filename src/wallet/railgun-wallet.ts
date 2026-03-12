@@ -1,14 +1,14 @@
 import { Signature } from '@railgun-community/circomlibjs';
 import { poseidon } from '../utils/poseidon';
 import { Database } from '../database/database';
-import { deriveNodes, SpendingKeyPair, WalletNode } from '../key-derivation/wallet-node';
-import { WalletData } from '../models/wallet-types';
-import { ByteUtils } from '../utils/bytes';
+import { deriveNodes, SpendingKeyPair, SpendingPublicKey, ViewingKeyPair, WalletNode } from '../key-derivation/wallet-node';
+import { KeysWalletData, WalletData } from '../models/wallet-types';
+import { ByteLength, ByteUtils } from '../utils/bytes';
 import { sha256 } from '../utils/hash';
 import { AbstractWallet } from './abstract-wallet';
 import { Mnemonic } from '../key-derivation/bip39';
 import { PublicInputsRailgun } from '../models';
-import { signEDDSA } from '../utils/keys-utils';
+import { signEDDSA, getPublicViewingKey } from '../utils/keys-utils';
 import { Prover } from '../prover/prover';
 
 class RailgunWallet extends AbstractWallet {
@@ -135,4 +135,95 @@ class RailgunWallet extends AbstractWallet {
   }
 }
 
-export { RailgunWallet };
+export type SignDelegate = (publicInputs: PublicInputsRailgun) => Promise<Signature>;
+
+class DelegatedSignWallet extends AbstractWallet {
+  private readonly signDelegate: SignDelegate;
+
+  constructor(
+    id: string,
+    db: Database,
+    viewingKeyPair: ViewingKeyPair,
+    spendingPublicKey: SpendingPublicKey,
+    creationBlockNumbers: Optional<number[][]>,
+    prover: Prover,
+    signDelegate: SignDelegate,
+  ) {
+    super(id, db, viewingKeyPair, spendingPublicKey, creationBlockNumbers, prover);
+    this.signDelegate = signDelegate;
+  }
+
+  async sign(publicInputs: PublicInputsRailgun, _encryptionKey: string): Promise<Signature> {
+    return this.signDelegate(publicInputs);
+  }
+
+  private static generateID(spendingPublicKey: SpendingPublicKey): string {
+    const combined = ByteUtils.nToHex(spendingPublicKey[0], ByteLength.UINT_256)
+      + ByteUtils.nToHex(spendingPublicKey[1], ByteLength.UINT_256);
+    return sha256(combined);
+  }
+
+  static async fromKeys(
+    db: Database,
+    encryptionKey: string,
+    viewingKeyPair: ViewingKeyPair,
+    spendingPublicKey: SpendingPublicKey,
+    creationBlockNumbers: Optional<number[][]>,
+    prover: Prover,
+    signDelegate: SignDelegate,
+  ): Promise<DelegatedSignWallet> {
+    const id = DelegatedSignWallet.generateID(spendingPublicKey);
+
+    const viewingPrivateKey = ByteUtils.fastBytesToHex(viewingKeyPair.privateKey);
+    const spendingPubStr = JSON.stringify(spendingPublicKey.map(String));
+
+    await AbstractWallet.write(db, id, encryptionKey, {
+      viewingPrivateKey,
+      spendingPublicKey: spendingPubStr,
+      creationBlockNumbers,
+    });
+
+    return new DelegatedSignWallet(
+      id,
+      db,
+      viewingKeyPair,
+      spendingPublicKey,
+      creationBlockNumbers,
+      prover,
+      signDelegate,
+    );
+  }
+
+  static async loadExisting(
+    db: Database,
+    encryptionKey: string,
+    id: string,
+    prover: Prover,
+    signDelegate: SignDelegate,
+  ): Promise<DelegatedSignWallet> {
+    const { viewingPrivateKey, spendingPublicKey: spendingPubStr, creationBlockNumbers } =
+      (await AbstractWallet.read(db, id, encryptionKey)) as KeysWalletData;
+    if (!viewingPrivateKey) {
+      throw new Error('Incorrect wallet type: DelegatedSign wallet requires stored viewingPrivateKey.');
+    }
+
+    const vpk = ByteUtils.hexStringToBytes(viewingPrivateKey);
+    const viewingKeyPair: ViewingKeyPair = {
+      privateKey: vpk,
+      pubkey: await getPublicViewingKey(vpk),
+    };
+    const spendingPublicKey = (JSON.parse(spendingPubStr) as string[]).map(BigInt) as [bigint, bigint];
+
+    return new DelegatedSignWallet(
+      id,
+      db,
+      viewingKeyPair,
+      spendingPublicKey,
+      creationBlockNumbers,
+      prover,
+      signDelegate,
+    );
+  }
+}
+
+export { RailgunWallet, DelegatedSignWallet };
