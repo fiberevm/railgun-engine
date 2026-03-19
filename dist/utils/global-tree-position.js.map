@@ -1,0 +1,1 @@
+{"version":3,"file":"global-tree-position.js","sourceRoot":"","sources":["../../src/utils/global-tree-position.ts"],"names":[],"mappings":";;;AAAA,iEAA4D;AAE/C,QAAA,+CAA+C,GAAG,KAAK,CAAC;AACxD,QAAA,mDAAmD,GAAG,KAAK,CAAC;AAElE,MAAM,qBAAqB,GAAG,CAAC,IAAY,EAAE,KAAa,EAAU,EAAE;IAC3E,OAAO,MAAM,CAAC,IAAI,GAAG,iCAAc,GAAG,KAAK,CAAC,CAAC;AAC/C,CAAC,CAAC;AAFW,QAAA,qBAAqB,yBAEhC"}

@@ -1,0 +1,1 @@
+{"version":3,"file":"multisig-wallet.js","sourceRoot":"","sources":["../../src/wallet/multisig-wallet.ts"],"names":[],"mappings":";;;AAEA,yDAAoD;AAEpD,MAAM,cAAe,SAAQ,iCAAc;IACzC,qFAAqF;IACrF,KAAK,CAAC,IAAI,CAAC,aAAkC,EAAE,cAAsB;QACnE,MAAM,IAAI,KAAK,CAAC,sCAAsC,CAAC,CAAC;IAC1D,CAAC;CACF;AAEQ,wCAAc"}

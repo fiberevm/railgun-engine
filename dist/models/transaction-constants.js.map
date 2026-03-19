@@ -1,0 +1,1 @@
+{"version":3,"file":"transaction-constants.js","sourceRoot":"","sources":["../../src/models/transaction-constants.ts"],"names":[],"mappings":";;;AAAa,QAAA,iBAAiB,GAAG,MAAM,CAAC;AAE3B,QAAA,YAAY,GAAG;IAC1B,WAAW,EAAE,MAAM,CAAC,CAAC,CAAC;IACtB,QAAQ,EAAE,MAAM,CAAC,CAAC,CAAC;IACnB,QAAQ,EAAE,MAAM,CAAC,CAAC,CAAC;CACpB,CAAC;AAEF,eAAe;AACF,QAAA,uBAAuB,GAAG,gCAAgC,CAAC"}

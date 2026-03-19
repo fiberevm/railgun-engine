@@ -1,0 +1,14 @@
+import { NullifiersEvent as LegacyNullifiersEvent, CommitmentBatchEvent as LegacyCommitmentBatchEvent, CommitmentPreimageStructOutput as LegacyCommitmentPreimageStructOutput, GeneratedCommitmentBatchEvent as LegacyGeneratedCommitmentBatchEvent, CommitmentCiphertextStructOutput as LegacyCommitmentCiphertextStructOutput } from '../../../abi/typechain/RailgunLogic_LegacyEvents';
+import { CommitmentEvent, EventsCommitmentListener, EventsNullifierListener } from '../../../models/event-types';
+import { LegacyEncryptedCommitment, LegacyGeneratedCommitment, Nullifier } from '../../../models/formatted-types';
+import { TXIDVersion } from '../../../models/poi-types';
+export declare function formatLegacyGeneratedCommitmentBatchCommitments(transactionHash: string, preImages: LegacyCommitmentPreimageStructOutput[], encryptedRandoms: [bigint, bigint][], blockNumber: number, utxoTree: number, utxoStartingIndex: number): LegacyGeneratedCommitment[];
+export declare function formatLegacyGeneratedCommitmentBatchEvent(commitmentBatchArgs: LegacyGeneratedCommitmentBatchEvent.OutputObject, transactionHash: string, blockNumber: number): CommitmentEvent;
+export declare function formatLegacyCommitmentBatchCommitments(transactionHash: string, hash: bigint[], commitments: LegacyCommitmentCiphertextStructOutput[], blockNumber: number, utxoTree: number, utxoStartingIndex: number): LegacyEncryptedCommitment[];
+export declare function formatLegacyCommitmentBatchEvent(commitmentBatchArgs: LegacyCommitmentBatchEvent.OutputObject, transactionHash: string, blockNumber: number): CommitmentEvent;
+export declare function processGeneratedCommitmentEvents(txidVersion: TXIDVersion, eventsListener: EventsCommitmentListener, logs: LegacyGeneratedCommitmentBatchEvent.Log[]): Promise<void>;
+export declare function processCommitmentBatchEvents(txidVersion: TXIDVersion, eventsListener: EventsCommitmentListener, logs: LegacyCommitmentBatchEvent.Log[]): Promise<void>;
+export declare function formatLegacyNullifierEvents(nullifierEventArgs: LegacyNullifiersEvent.OutputObject, transactionHash: string, blockNumber: number): Nullifier[];
+export declare function processLegacyGeneratedCommitmentEvents(txidVersion: TXIDVersion, eventsListener: EventsCommitmentListener, logs: LegacyGeneratedCommitmentBatchEvent.Log[]): Promise<void>;
+export declare function processLegacyCommitmentBatchEvents(txidVersion: TXIDVersion, eventsListener: EventsCommitmentListener, logs: LegacyCommitmentBatchEvent.Log[]): Promise<void>;
+export declare function processLegacyNullifierEvents(txidVersion: TXIDVersion, eventsNullifierListener: EventsNullifierListener, logs: LegacyNullifiersEvent.Log[]): Promise<void>;

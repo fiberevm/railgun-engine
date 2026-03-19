@@ -1,0 +1,1 @@
+{"version":3,"file":"hardware-wallet.js","sourceRoot":"","sources":["../../src/wallet/hardware-wallet.ts"],"names":[],"mappings":";;;AAEA,yDAAoD;AAEpD,MAAM,cAAe,SAAQ,iCAAc;IACzC,qFAAqF;IACrF,KAAK,CAAC,IAAI,CAAC,aAAkC,EAAE,cAAsB;QACnE,MAAM,IAAI,KAAK,CAAC,6CAA6C,CAAC,CAAC;IACjE,CAAC;CACF;AAEQ,wCAAc"}

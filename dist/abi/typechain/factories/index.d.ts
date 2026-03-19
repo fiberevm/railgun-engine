@@ -1,0 +1,3 @@
+export { PoseidonMerkleAccumulator__factory } from "./PoseidonMerkleAccumulator__factory";
+export { PoseidonMerkleVerifier__factory } from "./PoseidonMerkleVerifier__factory";
+export { TokenVault__factory } from "./TokenVault__factory";

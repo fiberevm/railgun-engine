@@ -1,0 +1,1 @@
+{"version":3,"file":"babyjubjub.js","sourceRoot":"","sources":["../../src/key-derivation/babyjubjub.ts"],"names":[],"mappings":";;;AAAA,gEAAyD;AAEzD,MAAa,UAAU;IACrB,MAAM,CAAC,SAAS,GAAG,qBAAO,CAAC,SAAS,CAAC;IAErC,MAAM,CAAC,WAAW,GAAG,qBAAO,CAAC,WAAW,CAAC;;AAH3C,gCAIC"}

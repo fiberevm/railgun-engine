@@ -1,0 +1,22 @@
+import { NFTTokenData, TokenData, TokenType } from '../models/formatted-types';
+import { UnshieldStoredEvent } from '../models/event-types';
+import { CommitmentPreimageStructOutput } from '../abi/typechain/PoseidonMerkleAccumulator';
+export declare const ERC721_NOTE_VALUE: bigint;
+export declare const assertValidNoteToken: (tokenData: TokenData, value: bigint) => void;
+export declare const assertValidNoteRandom: (random: string) => void;
+export declare const serializePreImage: (address: string, tokenData: TokenData, value: bigint, prefix?: boolean) => {
+    npk: string;
+    token: TokenData;
+    value: string;
+};
+export declare const extractTokenHashFromCommitmentPreImageV3: (preimage: CommitmentPreimageStructOutput) => string;
+export declare const serializeTokenData: (tokenAddress: string, tokenType: bigint | TokenType, tokenSubID: bigint | string) => TokenData;
+export declare const getNoteHash: (address: string, tokenData: TokenData, value: bigint) => bigint;
+export declare const getUnshieldEventNoteHash: (unshieldEvent: UnshieldStoredEvent) => bigint;
+export declare const getUnshieldPreImageNoteHash: (unshieldPreimage: CommitmentPreimageStructOutput) => bigint;
+export declare const getUnshieldTokenHash: (unshieldEvent: UnshieldStoredEvent) => string;
+export declare const getTokenDataHashERC20: (tokenAddress: string) => string;
+export declare const getTokenDataERC20: (tokenAddress: string) => TokenData;
+export declare const getTokenDataNFT: (nftAddress: string, tokenType: TokenType.ERC721 | TokenType.ERC1155, tokenSubID: string) => NFTTokenData;
+export declare const getTokenDataHash: (tokenData: TokenData) => string;
+export declare const getReadableTokenAddress: (tokenData: TokenData) => string;
