@@ -4,7 +4,7 @@
   "description": "Wallet framework for RAILGUN smart contracts and private balances on Ethereum and more.",
   "author": "RAILGUN Contributors",
   "license": "MIT",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "scripts": {
     "clean": "rimraf dist && rimraf coverage",
     "lint": "eslint src/**/*.ts src/*.ts; tsc --noEmit; tsc -p tsconfig.test.json --noEmit",
@@ -28,11 +28,11 @@
     "gen-typechain-test": "typechain --target ethers-v6 --out-dir ./src/test/abi/typechain ./src/test/abi/*.json"
   },
   "files": [
-    "/src",
+    "/dist",
     "/*.md"
   ],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/index.js"
   },
   "repository": {
     "type": "git",
