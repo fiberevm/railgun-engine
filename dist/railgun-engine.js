@@ -906,7 +906,7 @@ class RailgunEngine extends events_1.default {
     /**
      * Load network
      * @param railgunSmartWalletContractAddress - address of railgun instance (proxy contract)
-     * @param relayAdaptV2ContractAddress - address of railgun instance (proxy contract)
+     * @param relayAdaptV2ContractAddress - optional relay adapt contract address
      * @param provider - ethers provider for network
      * @param deploymentBlock - block number to start scanning from
      */
@@ -951,7 +951,9 @@ class RailgunEngine extends events_1.default {
         }
         // Create contract instances
         contract_store_1.ContractStore.railgunSmartWalletContracts.set(null, chain, new railgun_smart_wallet_1.RailgunSmartWalletContract(railgunSmartWalletContractAddress, defaultProvider, pollingProvider, chain));
-        contract_store_1.ContractStore.relayAdaptV2Contracts.set(null, chain, new relay_adapt_v2_1.RelayAdaptV2Contract(relayAdaptV2ContractAddress, defaultProvider));
+        if (relayAdaptV2ContractAddress) {
+            contract_store_1.ContractStore.relayAdaptV2Contracts.set(null, chain, new relay_adapt_v2_1.RelayAdaptV2Contract(relayAdaptV2ContractAddress, defaultProvider));
+        }
         if (supportsV3) {
             contract_store_1.ContractStore.poseidonMerkleAccumulatorV3Contracts.set(null, chain, new poseidon_merkle_accumulator_1.PoseidonMerkleAccumulatorContract(poseidonMerkleAccumulatorV3Address, defaultProvider, pollingProvider, chain));
             contract_store_1.ContractStore.poseidonMerkleVerifierV3Contracts.set(null, chain, new poseidon_merkle_verifier_1.PoseidonMerkleVerifierContract(poseidonMerkleVerifierV3Address, defaultProvider));
@@ -1045,9 +1047,6 @@ class RailgunEngine extends events_1.default {
      * @param chain - chainID of network to unload
      */
     async unloadNetwork(chain) {
-        if (contract_store_1.ContractStore.railgunSmartWalletContracts.has(null, chain)) {
-            return;
-        }
         // Unload merkletrees from wallets
         for (const wallet of Object.values(this.wallets)) {
             for (const txidVersion of poi_types_1.ACTIVE_TXID_VERSIONS) {
@@ -1277,6 +1276,18 @@ class RailgunEngine extends events_1.default {
         await this.loadWallet(wallet);
         return wallet;
     }
+    async loadExistingDelegatedSignWallet(encryptionKey, id, signDelegate) {
+        if ((0, is_defined_1.isDefined)(this.wallets[id])) {
+            const existingWallet = this.wallets[id];
+            if (!(existingWallet instanceof railgun_wallet_1.DelegatedSignWallet)) {
+                throw new Error('Incorrect wallet type.');
+            }
+            return existingWallet;
+        }
+        const wallet = await railgun_wallet_1.DelegatedSignWallet.loadExisting(this.db, encryptionKey, id, this.prover, signDelegate);
+        await this.loadWallet(wallet);
+        return wallet;
+    }
     /**
      * Load existing wallet
      * @param {string} encryptionKey - encryption key of wallet
@@ -1309,6 +1320,11 @@ class RailgunEngine extends events_1.default {
     }
     async createViewOnlyWalletFromShareableViewingKey(encryptionKey, shareableViewingKey, creationBlockNumbers) {
         const wallet = await view_only_wallet_1.ViewOnlyWallet.fromShareableViewingKey(this.db, encryptionKey, shareableViewingKey, creationBlockNumbers, this.prover);
+        await this.loadWallet(wallet);
+        return wallet;
+    }
+    async createWalletFromKeys(encryptionKey, viewingKeyPair, spendingPublicKey, creationBlockNumbers, signDelegate) {
+        const wallet = await railgun_wallet_1.DelegatedSignWallet.fromKeys(this.db, encryptionKey, viewingKeyPair, spendingPublicKey, creationBlockNumbers, this.prover, signDelegate);
         await this.loadWallet(wallet);
         return wallet;
     }

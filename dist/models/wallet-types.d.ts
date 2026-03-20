@@ -35,6 +35,11 @@ export type ViewOnlyWalletData = {
     shareableViewingKey: string;
     creationBlockNumbers: Optional<number[][]>;
 };
+export type KeysWalletData = {
+    viewingPrivateKey: string;
+    spendingPublicKey: string;
+    creationBlockNumbers: Optional<number[][]>;
+};
 export type ShareableViewingKeyData = {
     vpriv: string;
     spub: string;

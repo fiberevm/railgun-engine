@@ -1,1 +1,1 @@
-{"version":3,"file":"wallet-types.js","sourceRoot":"","sources":["../../src/models/wallet-types.ts"],"names":[],"mappings":";;;AAmGA,IAAY,6BAKX;AALD,WAAY,6BAA6B;IACvC,uFAAW,CAAA;IACX,qFAAU,CAAA;IACV,qGAAkB,CAAA;IAClB,qGAAkB,CAAA;AACpB,CAAC,EALW,6BAA6B,6CAA7B,6BAA6B,QAKxC"}
+{"version":3,"file":"wallet-types.js","sourceRoot":"","sources":["../../src/models/wallet-types.ts"],"names":[],"mappings":";;;AAyGA,IAAY,6BAKX;AALD,WAAY,6BAA6B;IACvC,uFAAW,CAAA;IACX,qFAAU,CAAA;IACV,qGAAkB,CAAA;IAClB,qGAAkB,CAAA;AACpB,CAAC,EALW,6BAA6B,6CAA7B,6BAA6B,QAKxC"}

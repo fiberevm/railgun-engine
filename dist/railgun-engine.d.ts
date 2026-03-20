@@ -7,7 +7,8 @@ import { RelayAdaptV2Contract } from './contracts/relay-adapt/V2/relay-adapt-v2'
 import { Database } from './database/database';
 import { Prover } from './prover/prover';
 import { encodeAddress, decodeAddress } from './key-derivation/bech32';
-import { RailgunWallet } from './wallet/railgun-wallet';
+import { RailgunWallet, DelegatedSignWallet, SignDelegate } from './wallet/railgun-wallet';
+import { SpendingPublicKey, ViewingKeyPair } from './key-derivation/wallet-node';
 import { Chain, EngineDebugger } from './models/engine-types';
 import { LegacyGeneratedCommitment, ShieldCommitment } from './models/formatted-types';
 import { GetLatestValidatedRailgunTxid, QuickSyncEvents, QuickSyncRailgunTransactionsV2 } from './models/event-types';
@@ -133,7 +134,7 @@ declare class RailgunEngine extends EventEmitter {
     /**
      * Load network
      * @param railgunSmartWalletContractAddress - address of railgun instance (proxy contract)
-     * @param relayAdaptV2ContractAddress - address of railgun instance (proxy contract)
+     * @param relayAdaptV2ContractAddress - optional relay adapt contract address
      * @param provider - ethers provider for network
      * @param deploymentBlock - block number to start scanning from
      */
@@ -187,6 +188,7 @@ declare class RailgunEngine extends EventEmitter {
      * @returns id
      */
     loadExistingWallet(encryptionKey: string, id: string): Promise<RailgunWallet>;
+    loadExistingDelegatedSignWallet(encryptionKey: string, id: string, signDelegate: SignDelegate): Promise<DelegatedSignWallet>;
     /**
      * Load existing wallet
      * @param {string} encryptionKey - encryption key of wallet
@@ -204,6 +206,7 @@ declare class RailgunEngine extends EventEmitter {
      */
     createWalletFromMnemonic(encryptionKey: string, mnemonic: string, index?: number, creationBlockNumbers?: Optional<number[][]>): Promise<RailgunWallet>;
     createViewOnlyWalletFromShareableViewingKey(encryptionKey: string, shareableViewingKey: string, creationBlockNumbers: Optional<number[][]>): Promise<ViewOnlyWallet>;
+    createWalletFromKeys(encryptionKey: string, viewingKeyPair: ViewingKeyPair, spendingPublicKey: SpendingPublicKey, creationBlockNumbers: Optional<number[][]>, signDelegate: SignDelegate): Promise<DelegatedSignWallet>;
     getAllShieldCommitments(txidVersion: TXIDVersion, chain: Chain, startingBlock: number): Promise<(ShieldCommitment | LegacyGeneratedCommitment)[]>;
     static encodeAddress: typeof encodeAddress;
     static decodeAddress: typeof decodeAddress;

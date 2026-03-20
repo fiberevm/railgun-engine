@@ -1,7 +1,7 @@
 /// <reference path="../../src/types/global.d.ts" />
 import { Signature } from '@railgun-community/circomlibjs';
 import { Database } from '../database/database';
-import { SpendingKeyPair } from '../key-derivation/wallet-node';
+import { SpendingKeyPair, SpendingPublicKey, ViewingKeyPair } from '../key-derivation/wallet-node';
 import { AbstractWallet } from './abstract-wallet';
 import { PublicInputsRailgun } from '../models';
 import { Prover } from '../prover/prover';
@@ -47,4 +47,13 @@ declare class RailgunWallet extends AbstractWallet {
      */
     static loadExisting(db: Database, encryptionKey: string, id: string, prover: Prover): Promise<RailgunWallet>;
 }
-export { RailgunWallet };
+export type SignDelegate = (publicInputs: PublicInputsRailgun) => Promise<Signature>;
+declare class DelegatedSignWallet extends AbstractWallet {
+    private readonly signDelegate;
+    constructor(id: string, db: Database, viewingKeyPair: ViewingKeyPair, spendingPublicKey: SpendingPublicKey, creationBlockNumbers: Optional<number[][]>, prover: Prover, signDelegate: SignDelegate);
+    sign(publicInputs: PublicInputsRailgun, _encryptionKey: string): Promise<Signature>;
+    private static generateID;
+    static fromKeys(db: Database, encryptionKey: string, viewingKeyPair: ViewingKeyPair, spendingPublicKey: SpendingPublicKey, creationBlockNumbers: Optional<number[][]>, prover: Prover, signDelegate: SignDelegate): Promise<DelegatedSignWallet>;
+    static loadExisting(db: Database, encryptionKey: string, id: string, prover: Prover, signDelegate: SignDelegate): Promise<DelegatedSignWallet>;
+}
+export { RailgunWallet, DelegatedSignWallet };

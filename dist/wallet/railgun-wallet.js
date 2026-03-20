@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RailgunWallet = void 0;
+exports.DelegatedSignWallet = exports.RailgunWallet = void 0;
 const poseidon_1 = require("../utils/poseidon");
 const wallet_node_1 = require("../key-derivation/wallet-node");
 const bytes_1 = require("../utils/bytes");
@@ -83,4 +83,45 @@ class RailgunWallet extends abstract_wallet_1.AbstractWallet {
     }
 }
 exports.RailgunWallet = RailgunWallet;
+class DelegatedSignWallet extends abstract_wallet_1.AbstractWallet {
+    signDelegate;
+    constructor(id, db, viewingKeyPair, spendingPublicKey, creationBlockNumbers, prover, signDelegate) {
+        super(id, db, viewingKeyPair, spendingPublicKey, creationBlockNumbers, prover);
+        this.signDelegate = signDelegate;
+    }
+    async sign(publicInputs, _encryptionKey) {
+        return this.signDelegate(publicInputs);
+    }
+    static generateID(viewingPrivateKey, spendingPublicKey) {
+        const combined = bytes_1.ByteUtils.fastBytesToHex(viewingPrivateKey)
+            + bytes_1.ByteUtils.nToHex(spendingPublicKey[0], bytes_1.ByteLength.UINT_256)
+            + bytes_1.ByteUtils.nToHex(spendingPublicKey[1], bytes_1.ByteLength.UINT_256);
+        return (0, hash_1.sha256)(combined);
+    }
+    static async fromKeys(db, encryptionKey, viewingKeyPair, spendingPublicKey, creationBlockNumbers, prover, signDelegate) {
+        const id = DelegatedSignWallet.generateID(viewingKeyPair.privateKey, spendingPublicKey);
+        const viewingPrivateKey = bytes_1.ByteUtils.fastBytesToHex(viewingKeyPair.privateKey);
+        const spendingPubStr = JSON.stringify(spendingPublicKey.map(String));
+        await abstract_wallet_1.AbstractWallet.write(db, id, encryptionKey, {
+            viewingPrivateKey,
+            spendingPublicKey: spendingPubStr,
+            creationBlockNumbers,
+        });
+        return new DelegatedSignWallet(id, db, viewingKeyPair, spendingPublicKey, creationBlockNumbers, prover, signDelegate);
+    }
+    static async loadExisting(db, encryptionKey, id, prover, signDelegate) {
+        const { viewingPrivateKey, spendingPublicKey: spendingPubStr, creationBlockNumbers } = (await abstract_wallet_1.AbstractWallet.read(db, id, encryptionKey));
+        if (!viewingPrivateKey) {
+            throw new Error('Incorrect wallet type: DelegatedSign wallet requires stored viewingPrivateKey.');
+        }
+        const vpk = bytes_1.ByteUtils.hexStringToBytes(viewingPrivateKey);
+        const viewingKeyPair = {
+            privateKey: vpk,
+            pubkey: await (0, keys_utils_1.getPublicViewingKey)(vpk),
+        };
+        const spendingPublicKey = JSON.parse(spendingPubStr).map(BigInt);
+        return new DelegatedSignWallet(id, db, viewingKeyPair, spendingPublicKey, creationBlockNumbers, prover, signDelegate);
+    }
+}
+exports.DelegatedSignWallet = DelegatedSignWallet;
 //# sourceMappingURL=railgun-wallet.js.map

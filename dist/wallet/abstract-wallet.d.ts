@@ -8,7 +8,7 @@ import { SpendingPublicKey, ViewingKeyPair } from '../key-derivation/wallet-node
 import { UnshieldStoredEvent } from '../models/event-types';
 import { BytesData, Commitment } from '../models/formatted-types';
 import { TXO, WalletBalanceBucket } from '../models/txo-types';
-import { AddressKeys, TokenBalancesAllTxidVersions, TotalBalancesByTreeNumber, TokenBalances, TransactionHistoryEntry, TreeBalance, ViewOnlyWalletData, WalletData, WalletDetails, WalletDetailsMap } from '../models/wallet-types';
+import { AddressKeys, TokenBalancesAllTxidVersions, TotalBalancesByTreeNumber, TokenBalances, TransactionHistoryEntry, TreeBalance, KeysWalletData, ViewOnlyWalletData, WalletData, WalletDetails, WalletDetailsMap } from '../models/wallet-types';
 import { Chain } from '../models/engine-types';
 import { PublicInputsRailgun } from '../models/prover-types';
 import { UTXOMerkletree } from '../merkletree/utxo-merkletree';
@@ -232,8 +232,8 @@ declare abstract class AbstractWallet extends EventEmitter {
     fullRedecryptBalancesAllTXIDVersions(chain: Chain, progressCallback: Optional<(progress: number) => void>): Promise<void>;
     abstract sign(publicInputs: PublicInputsRailgun, encryptionKey: string): Promise<Signature>;
     static dbPath(id: string): BytesData[];
-    static read(db: Database, id: string, encryptionKey: string): Promise<WalletData | ViewOnlyWalletData>;
-    static write(db: Database, id: string, encryptionKey: string, data: WalletData | ViewOnlyWalletData): Promise<void>;
+    static read(db: Database, id: string, encryptionKey: string): Promise<WalletData | ViewOnlyWalletData | KeysWalletData>;
+    static write(db: Database, id: string, encryptionKey: string, data: WalletData | ViewOnlyWalletData | KeysWalletData): Promise<void>;
     static delete(db: Database, id: string): Promise<void>;
     /**
      * Loads encrypted wallet data from database.
@@ -241,7 +241,7 @@ declare abstract class AbstractWallet extends EventEmitter {
      * @param encryptionKey - encryption key to use with database
      * @param id - wallet id
      */
-    static getEncryptedData(db: Database, encryptionKey: string, id: string): Promise<WalletData | ViewOnlyWalletData>;
+    static getEncryptedData(db: Database, encryptionKey: string, id: string): Promise<WalletData | ViewOnlyWalletData | KeysWalletData>;
     static getKeysFromShareableViewingKey(shareableViewingKey: string): {
         viewingPrivateKey: string;
         spendingPublicKey: SpendingPublicKey;
