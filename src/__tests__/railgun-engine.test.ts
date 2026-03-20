@@ -1,5 +1,6 @@
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
+import type { Signature } from '@railgun-community/circomlibjs';
 import { Contract, Wallet } from 'ethers';
 import memdown from 'memdown';
 import { groth16 } from 'snarkjs';
@@ -8,7 +9,7 @@ import { RailgunEngine } from '../railgun-engine';
 import { abi as erc20Abi } from '../test/test-erc20-abi.test';
 import { config } from '../test/config.test';
 import { abi as erc721Abi } from '../test/test-erc721-abi.test';
-import { RailgunWallet } from '../wallet/railgun-wallet';
+import { DelegatedSignWallet, RailgunWallet } from '../wallet/railgun-wallet';
 import {
   awaitMultipleScans,
   awaitScan,
@@ -51,14 +52,17 @@ import { TXIDMerkletree } from '../merkletree/txid-merkletree';
 import { TXIDVersion } from '../models/poi-types';
 import { AES } from '../utils/encryption/aes';
 import { RailgunVersionedSmartContracts } from '../contracts/railgun-smart-wallet/railgun-versioned-smart-contracts';
+import { RelayAdaptVersionedSmartContracts } from '../contracts/relay-adapt/relay-adapt-versioned-smart-contracts';
 import { WalletBalanceBucket } from '../models/txo-types';
 import { XChaCha20 } from '../utils/encryption/x-cha-cha-20';
+import { deriveNodes } from '../key-derivation';
 
 chai.use(chaiAsPromised);
 
 const txidVersion = getTestTXIDVersion();
 
 let provider: PollingJsonRpcProvider;
+let pollingProvider: PollingJsonRpcProvider;
 let chain: Chain;
 let engine: RailgunEngine;
 let ethersWallet: Wallet;
@@ -174,7 +178,7 @@ describe('railgun-engine', function test() {
 
     wallet = await engine.createWalletFromMnemonic(testEncryptionKey, testMnemonic);
     wallet2 = await engine.createWalletFromMnemonic(testEncryptionKey, testMnemonic, 1);
-    const pollingProvider = await createPollingJsonRpcProviderForListeners(provider, chain.id);
+    pollingProvider = await createPollingJsonRpcProviderForListeners(provider, chain.id);
     await engine.loadNetwork(
       chain,
       config.contracts.proxy,
@@ -185,7 +189,6 @@ describe('railgun-engine', function test() {
       provider,
       pollingProvider,
       { [TXIDVersion.V2_PoseidonMerkle]: 24, [TXIDVersion.V3_PoseidonMerkle]: 24 },
-      0,
       !isV2Test(), // supportsV3
     );
 
@@ -212,6 +215,90 @@ describe('railgun-engine', function test() {
     engine.unloadWallet(wallet.id);
     await engine.loadExistingWallet(testEncryptionKey, wallet.id);
     expect(engine.wallets[wallet.id].id).to.equal(wallet.id);
+  });
+
+  it('Should load existing delegated-sign wallets', async () => {
+    const nodes = deriveNodes(testMnemonic, 7);
+    const viewingKeyPair = await nodes.viewing.getViewingKeyPair();
+    const spendingPublicKey = nodes.spending.getSpendingKeyPair().pubkey;
+    const signDelegate = async (): Promise<Signature> => ({
+      R8: [0n, 0n],
+      S: 0n,
+    });
+
+    const delegatedWallet = await engine.createWalletFromKeys(
+      testEncryptionKey,
+      viewingKeyPair,
+      spendingPublicKey,
+      undefined,
+      signDelegate,
+    );
+
+    engine.unloadWallet(delegatedWallet.id);
+
+    const reloadedWallet = await engine.loadExistingDelegatedSignWallet(
+      testEncryptionKey,
+      delegatedWallet.id,
+      signDelegate,
+    );
+
+    expect(reloadedWallet).to.be.instanceOf(DelegatedSignWallet);
+    expect(reloadedWallet.id).to.equal(delegatedWallet.id);
+    expect(reloadedWallet.getAddress()).to.equal(delegatedWallet.getAddress());
+    expect(engine.wallets[delegatedWallet.id]).to.equal(reloadedWallet);
+  });
+
+  it('Should assign distinct delegated-sign wallet IDs for distinct viewing keys', async () => {
+    const nodes = deriveNodes(testMnemonic, 7);
+    const alternateNodes = deriveNodes(testMnemonic, 8);
+    const viewingKeyPair = await nodes.viewing.getViewingKeyPair();
+    const alternateViewingKeyPair = await alternateNodes.viewing.getViewingKeyPair();
+    const spendingPublicKey = nodes.spending.getSpendingKeyPair().pubkey;
+    const signDelegate = async (): Promise<Signature> => ({
+      R8: [0n, 0n],
+      S: 0n,
+    });
+
+    const delegatedWallet = await engine.createWalletFromKeys(
+      testEncryptionKey,
+      viewingKeyPair,
+      spendingPublicKey,
+      undefined,
+      signDelegate,
+    );
+    const alternateDelegatedWallet = await engine.createWalletFromKeys(
+      testEncryptionKey,
+      alternateViewingKeyPair,
+      spendingPublicKey,
+      undefined,
+      signDelegate,
+    );
+
+    expect(alternateDelegatedWallet.id).to.not.equal(delegatedWallet.id);
+    expect(alternateDelegatedWallet.getAddress()).to.not.equal(delegatedWallet.getAddress());
+  });
+
+  it('Should clear RelayAdapt when reloading a network without it configured', async () => {
+    expect(
+      RelayAdaptVersionedSmartContracts.getRelayAdaptContract(txidVersion, chain),
+    ).to.not.be.undefined;
+
+    await engine.loadNetwork(
+      chain,
+      config.contracts.proxy,
+      '',
+      config.contracts.poseidonMerkleAccumulatorV3,
+      config.contracts.poseidonMerkleVerifierV3,
+      config.contracts.tokenVaultV3,
+      provider,
+      pollingProvider,
+      { [TXIDVersion.V2_PoseidonMerkle]: 24, [TXIDVersion.V3_PoseidonMerkle]: 24 },
+      !isV2Test(), // supportsV3
+    );
+
+    expect(() =>
+      RelayAdaptVersionedSmartContracts.getRelayAdaptContract(txidVersion, chain),
+    ).to.throw;
   });
 
   it('Should delete wallet', async () => {

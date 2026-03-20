@@ -54,6 +54,7 @@ import {
   TransactionHistoryTransferTokenAmount,
   TransactionHistoryUnshieldTokenAmount,
   TreeBalance,
+  KeysWalletData,
   ViewOnlyWalletData,
   WalletData,
   WalletDetails,
@@ -2091,7 +2092,7 @@ abstract class AbstractWallet extends EventEmitter {
     db: Database,
     id: string,
     encryptionKey: string,
-  ): Promise<WalletData | ViewOnlyWalletData> {
+  ): Promise<WalletData | ViewOnlyWalletData | KeysWalletData> {
     return msgpack.decode(
       ByteUtils.fastHexToBytes(await db.getEncrypted(AbstractWallet.dbPath(id), encryptionKey)),
     );
@@ -2101,7 +2102,7 @@ abstract class AbstractWallet extends EventEmitter {
     db: Database,
     id: string,
     encryptionKey: string,
-    data: WalletData | ViewOnlyWalletData,
+    data: WalletData | ViewOnlyWalletData | KeysWalletData,
   ): Promise<void> {
     await db.putEncrypted(AbstractWallet.dbPath(id), encryptionKey, msgpack.encode(data));
   }
@@ -2120,7 +2121,7 @@ abstract class AbstractWallet extends EventEmitter {
     db: Database,
     encryptionKey: string,
     id: string,
-  ): Promise<WalletData | ViewOnlyWalletData> {
+  ): Promise<WalletData | ViewOnlyWalletData | KeysWalletData> {
     return msgpack.decode(
       ByteUtils.fastHexToBytes(
         await db.getEncrypted([fromUTF8String('wallet'), id], encryptionKey),

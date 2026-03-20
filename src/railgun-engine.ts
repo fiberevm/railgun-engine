@@ -7,7 +7,8 @@ import { Database, DatabaseNamespace } from './database/database';
 import { Prover } from './prover/prover';
 import { encodeAddress, decodeAddress } from './key-derivation/bech32';
 import { ByteLength, ByteUtils } from './utils/bytes';
-import { RailgunWallet } from './wallet/railgun-wallet';
+import { RailgunWallet, DelegatedSignWallet, SignDelegate } from './wallet/railgun-wallet';
+import { SpendingPublicKey, ViewingKeyPair } from './key-derivation/wallet-node';
 import EngineDebug from './debugger/debugger';
 import { Chain, EngineDebugger } from './models/engine-types';
 import {
@@ -1416,7 +1417,7 @@ class RailgunEngine extends EventEmitter {
   /**
    * Load network
    * @param railgunSmartWalletContractAddress - address of railgun instance (proxy contract)
-   * @param relayAdaptV2ContractAddress - address of railgun instance (proxy contract)
+   * @param relayAdaptV2ContractAddress - optional relay adapt contract address
    * @param provider - ethers provider for network
    * @param deploymentBlock - block number to start scanning from
    */
@@ -1508,11 +1509,13 @@ class RailgunEngine extends EventEmitter {
       ),
     );
 
-    ContractStore.relayAdaptV2Contracts.set(
-      null,
-      chain,
-      new RelayAdaptV2Contract(relayAdaptV2ContractAddress, defaultProvider),
-    );
+    if (relayAdaptV2ContractAddress) {
+      ContractStore.relayAdaptV2Contracts.set(
+        null,
+        chain,
+        new RelayAdaptV2Contract(relayAdaptV2ContractAddress, defaultProvider),
+      );
+    }
 
     if (supportsV3) {
       ContractStore.poseidonMerkleAccumulatorV3Contracts.set(
@@ -1682,10 +1685,6 @@ class RailgunEngine extends EventEmitter {
    * @param chain - chainID of network to unload
    */
   private async unloadNetwork(chain: Chain): Promise<void> {
-    if (ContractStore.railgunSmartWalletContracts.has(null, chain)) {
-      return;
-    }
-
     // Unload merkletrees from wallets
     for (const wallet of Object.values(this.wallets)) {
       for (const txidVersion of ACTIVE_TXID_VERSIONS) {
@@ -1999,6 +1998,29 @@ class RailgunEngine extends EventEmitter {
     return wallet;
   }
 
+  async loadExistingDelegatedSignWallet(
+    encryptionKey: string,
+    id: string,
+    signDelegate: SignDelegate,
+  ): Promise<DelegatedSignWallet> {
+    if (isDefined(this.wallets[id])) {
+      const existingWallet = this.wallets[id];
+      if (!(existingWallet instanceof DelegatedSignWallet)) {
+        throw new Error('Incorrect wallet type.');
+      }
+      return existingWallet;
+    }
+    const wallet = await DelegatedSignWallet.loadExisting(
+      this.db,
+      encryptionKey,
+      id,
+      this.prover,
+      signDelegate,
+    );
+    await this.loadWallet(wallet);
+    return wallet;
+  }
+
   /**
    * Load existing wallet
    * @param {string} encryptionKey - encryption key of wallet
@@ -2055,6 +2077,26 @@ class RailgunEngine extends EventEmitter {
       shareableViewingKey,
       creationBlockNumbers,
       this.prover,
+    );
+    await this.loadWallet(wallet);
+    return wallet;
+  }
+
+  async createWalletFromKeys(
+    encryptionKey: string,
+    viewingKeyPair: ViewingKeyPair,
+    spendingPublicKey: SpendingPublicKey,
+    creationBlockNumbers: Optional<number[][]>,
+    signDelegate: SignDelegate,
+  ): Promise<DelegatedSignWallet> {
+    const wallet = await DelegatedSignWallet.fromKeys(
+      this.db,
+      encryptionKey,
+      viewingKeyPair,
+      spendingPublicKey,
+      creationBlockNumbers,
+      this.prover,
+      signDelegate,
     );
     await this.loadWallet(wallet);
     return wallet;
