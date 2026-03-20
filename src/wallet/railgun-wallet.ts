@@ -157,8 +157,12 @@ class DelegatedSignWallet extends AbstractWallet {
     return this.signDelegate(publicInputs);
   }
 
-  private static generateID(spendingPublicKey: SpendingPublicKey): string {
-    const combined = ByteUtils.nToHex(spendingPublicKey[0], ByteLength.UINT_256)
+  private static generateID(
+    viewingPrivateKey: Uint8Array,
+    spendingPublicKey: SpendingPublicKey,
+  ): string {
+    const combined = ByteUtils.fastBytesToHex(viewingPrivateKey)
+      + ByteUtils.nToHex(spendingPublicKey[0], ByteLength.UINT_256)
       + ByteUtils.nToHex(spendingPublicKey[1], ByteLength.UINT_256);
     return sha256(combined);
   }
@@ -172,7 +176,7 @@ class DelegatedSignWallet extends AbstractWallet {
     prover: Prover,
     signDelegate: SignDelegate,
   ): Promise<DelegatedSignWallet> {
-    const id = DelegatedSignWallet.generateID(spendingPublicKey);
+    const id = DelegatedSignWallet.generateID(viewingKeyPair.privateKey, spendingPublicKey);
 
     const viewingPrivateKey = ByteUtils.fastBytesToHex(viewingKeyPair.privateKey);
     const spendingPubStr = JSON.stringify(spendingPublicKey.map(String));

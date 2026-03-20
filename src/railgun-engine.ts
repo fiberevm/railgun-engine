@@ -1685,10 +1685,6 @@ class RailgunEngine extends EventEmitter {
    * @param chain - chainID of network to unload
    */
   private async unloadNetwork(chain: Chain): Promise<void> {
-    if (ContractStore.railgunSmartWalletContracts.has(null, chain)) {
-      return;
-    }
-
     // Unload merkletrees from wallets
     for (const wallet of Object.values(this.wallets)) {
       for (const txidVersion of ACTIVE_TXID_VERSIONS) {
