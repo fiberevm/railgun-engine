@@ -1,5 +1,6 @@
 import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
+import type { Signature } from '@railgun-community/circomlibjs';
 import { Contract, Wallet } from 'ethers';
 import memdown from 'memdown';
 import { groth16 } from 'snarkjs';
@@ -8,7 +9,7 @@ import { RailgunEngine } from '../railgun-engine';
 import { abi as erc20Abi } from '../test/test-erc20-abi.test';
 import { config } from '../test/config.test';
 import { abi as erc721Abi } from '../test/test-erc721-abi.test';
-import { RailgunWallet } from '../wallet/railgun-wallet';
+import { DelegatedSignWallet, RailgunWallet } from '../wallet/railgun-wallet';
 import {
   awaitMultipleScans,
   awaitScan,
@@ -53,6 +54,7 @@ import { AES } from '../utils/encryption/aes';
 import { RailgunVersionedSmartContracts } from '../contracts/railgun-smart-wallet/railgun-versioned-smart-contracts';
 import { WalletBalanceBucket } from '../models/txo-types';
 import { XChaCha20 } from '../utils/encryption/x-cha-cha-20';
+import { deriveNodes } from '../key-derivation';
 
 chai.use(chaiAsPromised);
 
@@ -212,6 +214,37 @@ describe('railgun-engine', function test() {
     engine.unloadWallet(wallet.id);
     await engine.loadExistingWallet(testEncryptionKey, wallet.id);
     expect(engine.wallets[wallet.id].id).to.equal(wallet.id);
+  });
+
+  it('Should load existing delegated-sign wallets', async () => {
+    const nodes = deriveNodes(testMnemonic, 7);
+    const viewingKeyPair = await nodes.viewing.getViewingKeyPair();
+    const spendingPublicKey = nodes.spending.getSpendingKeyPair().pubkey;
+    const signDelegate = async (): Promise<Signature> => ({
+      R8: [0n, 0n],
+      S: 0n,
+    });
+
+    const delegatedWallet = await engine.createWalletFromKeys(
+      testEncryptionKey,
+      viewingKeyPair,
+      spendingPublicKey,
+      undefined,
+      signDelegate,
+    );
+
+    engine.unloadWallet(delegatedWallet.id);
+
+    const reloadedWallet = await engine.loadExistingDelegatedSignWallet(
+      testEncryptionKey,
+      delegatedWallet.id,
+      signDelegate,
+    );
+
+    expect(reloadedWallet).to.be.instanceOf(DelegatedSignWallet);
+    expect(reloadedWallet.id).to.equal(delegatedWallet.id);
+    expect(reloadedWallet.getAddress()).to.equal(delegatedWallet.getAddress());
+    expect(engine.wallets[delegatedWallet.id]).to.equal(reloadedWallet);
   });
 
   it('Should delete wallet', async () => {
