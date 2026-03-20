@@ -1417,7 +1417,7 @@ class RailgunEngine extends EventEmitter {
   /**
    * Load network
    * @param railgunSmartWalletContractAddress - address of railgun instance (proxy contract)
-   * @param relayAdaptV2ContractAddress - address of railgun instance (proxy contract)
+   * @param relayAdaptV2ContractAddress - optional relay adapt contract address
    * @param provider - ethers provider for network
    * @param deploymentBlock - block number to start scanning from
    */
@@ -1509,11 +1509,13 @@ class RailgunEngine extends EventEmitter {
       ),
     );
 
-    ContractStore.relayAdaptV2Contracts.set(
-      null,
-      chain,
-      new RelayAdaptV2Contract(relayAdaptV2ContractAddress, defaultProvider),
-    );
+    if (relayAdaptV2ContractAddress) {
+      ContractStore.relayAdaptV2Contracts.set(
+        null,
+        chain,
+        new RelayAdaptV2Contract(relayAdaptV2ContractAddress, defaultProvider),
+      );
+    }
 
     if (supportsV3) {
       ContractStore.poseidonMerkleAccumulatorV3Contracts.set(
