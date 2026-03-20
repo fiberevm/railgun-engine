@@ -2002,6 +2002,29 @@ class RailgunEngine extends EventEmitter {
     return wallet;
   }
 
+  async loadExistingDelegatedSignWallet(
+    encryptionKey: string,
+    id: string,
+    signDelegate: SignDelegate,
+  ): Promise<DelegatedSignWallet> {
+    if (isDefined(this.wallets[id])) {
+      const existingWallet = this.wallets[id];
+      if (!(existingWallet instanceof DelegatedSignWallet)) {
+        throw new Error('Incorrect wallet type.');
+      }
+      return existingWallet;
+    }
+    const wallet = await DelegatedSignWallet.loadExisting(
+      this.db,
+      encryptionKey,
+      id,
+      this.prover,
+      signDelegate,
+    );
+    await this.loadWallet(wallet);
+    return wallet;
+  }
+
   /**
    * Load existing wallet
    * @param {string} encryptionKey - encryption key of wallet
