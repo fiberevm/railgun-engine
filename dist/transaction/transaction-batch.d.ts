@@ -1,4 +1,3 @@
-import { RailgunWallet } from '../wallet/railgun-wallet';
 import { Prover } from '../prover/prover';
 import { Transaction } from './transaction';
 import { SpendingSolutionGroup, UnshieldData } from '../models/txo-types';
@@ -7,6 +6,7 @@ import { TransactionStructV2, TransactionStructV3 } from '../models/transaction-
 import { Chain } from '../models/engine-types';
 import { TransactNote } from '../note/transact-note';
 import { TXIDVersion, TreeBalance } from '../models';
+import { AbstractWallet } from '../wallet';
 export declare const GAS_ESTIMATE_VARIANCE_DUMMY_TO_ACTUAL_TRANSACTION = 9000;
 export declare class TransactionBatch {
     private adaptID;
@@ -26,7 +26,7 @@ export declare class TransactionBatch {
     private unshieldTotal;
     setAdaptID(adaptID: AdaptID): void;
     private getOutputTokenDatas;
-    generateValidSpendingSolutionGroupsAllOutputs(wallet: RailgunWallet, txidVersion: TXIDVersion, originShieldTxidForSpendabilityOverride?: string): Promise<SpendingSolutionGroup[]>;
+    generateValidSpendingSolutionGroupsAllOutputs(wallet: AbstractWallet, txidVersion: TXIDVersion, originShieldTxidForSpendabilityOverride?: string): Promise<SpendingSolutionGroup[]>;
     /**
      * Generates spending solution groups for outputs
      * @param wallet - wallet to spend from
@@ -41,7 +41,7 @@ export declare class TransactionBatch {
      * Finds array of UTXOs groups that satisfies the required amount, excluding an already-used array of UTXO IDs.
      */
     createComplexSatisfyingSpendingSolutionGroups(tokenData: TokenData, tokenOutputs: TransactNote[], treeSortedBalances: TreeBalance[]): SpendingSolutionGroup[];
-    static getChangeOutput(wallet: RailgunWallet, spendingSolutionGroup: SpendingSolutionGroup): Optional<TransactNote>;
+    static getChangeOutput(wallet: AbstractWallet, spendingSolutionGroup: SpendingSolutionGroup): Optional<TransactNote>;
     /**
      * Generate proofs and return serialized transactions
      * @param prover - prover to use
@@ -49,7 +49,7 @@ export declare class TransactionBatch {
      * @param encryptionKey - encryption key for wallet
      * @returns serialized transaction
      */
-    generateTransactions(prover: Prover, wallet: RailgunWallet, txidVersion: TXIDVersion, encryptionKey: string, progressCallback: (progress: number, status: string) => void, _shouldGeneratePreTransactionPOIs?: boolean, originShieldTxidForSpendabilityOverride?: string): Promise<{
+    generateTransactions(prover: Prover, wallet: AbstractWallet, txidVersion: TXIDVersion, encryptionKey: string, progressCallback: (progress: number, status: string) => void, _shouldGeneratePreTransactionPOIs?: boolean, originShieldTxidForSpendabilityOverride?: string): Promise<{
         provedTransactions: (TransactionStructV2 | TransactionStructV3)[];
     }>;
     private static logDummySpendingSolutionGroupsSummary;
@@ -59,6 +59,6 @@ export declare class TransactionBatch {
      * @param encryptionKey - encryption key for wallet
      * @returns serialized transaction
      */
-    generateDummyTransactions(prover: Prover, wallet: RailgunWallet, txidVersion: TXIDVersion, encryptionKey: string, originShieldTxidForSpendabilityOverride?: string): Promise<(TransactionStructV2 | TransactionStructV3)[]>;
+    generateDummyTransactions(prover: Prover, wallet: AbstractWallet, txidVersion: TXIDVersion, encryptionKey: string, originShieldTxidForSpendabilityOverride?: string): Promise<(TransactionStructV2 | TransactionStructV3)[]>;
     generateTransactionForSpendingSolutionGroup(spendingSolutionGroup: SpendingSolutionGroup, changeOutput: Optional<TransactNote>): Transaction;
 }

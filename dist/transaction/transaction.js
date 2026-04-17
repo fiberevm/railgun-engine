@@ -82,7 +82,7 @@ class Transaction {
     async generateTransactionRequest(wallet, txidVersion, encryptionKey, globalBoundParams) {
         const merkletree = wallet.getUTXOMerkletree(txidVersion, this.chain);
         const merkleRoot = await merkletree.getRoot(this.spendingTree);
-        const spendingKey = await wallet.getSpendingKeyPair(encryptionKey);
+        const spendingPublicKey = wallet.spendingPublicKey;
         const nullifyingKey = wallet.getNullifyingKey();
         const senderViewingKeys = wallet.getViewingKeyPair();
         // Get values
@@ -126,7 +126,7 @@ class Transaction {
             pathElements,
             leavesIndices: pathIndices,
             valueOut: allOutputs.map((note) => note.value),
-            publicKey: spendingKey.pubkey,
+            publicKey: spendingPublicKey,
             npkOut: allOutputs.map((x) => x.notePublicKey),
             nullifyingKey,
         };

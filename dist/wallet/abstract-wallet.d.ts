@@ -21,7 +21,7 @@ declare abstract class AbstractWallet extends EventEmitter {
     readonly id: string;
     readonly viewingKeyPair: ViewingKeyPair;
     readonly masterPublicKey: bigint;
-    private readonly spendingPublicKey;
+    readonly spendingPublicKey: SpendingPublicKey;
     readonly nullifyingKey: bigint;
     private readonly utxoMerkletrees;
     private readonly txidMerkletrees;

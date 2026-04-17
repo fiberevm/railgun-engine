@@ -1,5 +1,4 @@
 import { BigNumberish } from 'ethers';
-import { RailgunWallet } from '../wallet/railgun-wallet';
 import { Prover } from '../prover/prover';
 import { HashZero } from '../utils/bytes';
 import { findExactSolutionsOverTargetValue } from '../solutions/simple-solutions';
@@ -109,7 +108,7 @@ export class TransactionBatch {
   }
 
   async generateValidSpendingSolutionGroupsAllOutputs(
-    wallet: RailgunWallet,
+    wallet: AbstractWallet,
     txidVersion: TXIDVersion,
     originShieldTxidForSpendabilityOverride?: string,
   ): Promise<SpendingSolutionGroup[]> {
@@ -132,7 +131,7 @@ export class TransactionBatch {
    * @param wallet - wallet to spend from
    */
   private async generateValidSpendingSolutionGroups(
-    wallet: RailgunWallet,
+    wallet: AbstractWallet,
     txidVersion: TXIDVersion,
     tokenData: TokenData,
     originShieldTxidForSpendabilityOverride?: string,
@@ -323,7 +322,7 @@ export class TransactionBatch {
   }
 
   static getChangeOutput(
-    wallet: RailgunWallet,
+    wallet: AbstractWallet,
     spendingSolutionGroup: SpendingSolutionGroup,
   ): Optional<TransactNote> {
     const totalIn = calculateTotalSpend(spendingSolutionGroup.utxos);
@@ -361,7 +360,7 @@ export class TransactionBatch {
    */
   async generateTransactions(
     prover: Prover,
-    wallet: RailgunWallet,
+    wallet: AbstractWallet,
     txidVersion: TXIDVersion,
     encryptionKey: string,
     progressCallback: (progress: number, status: string) => void,
@@ -517,7 +516,7 @@ export class TransactionBatch {
    */
   async generateDummyTransactions(
     prover: Prover,
-    wallet: RailgunWallet,
+    wallet: AbstractWallet,
     txidVersion: TXIDVersion,
     encryptionKey: string,
     originShieldTxidForSpendabilityOverride?: string,

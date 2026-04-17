@@ -121,7 +121,7 @@ abstract class AbstractWallet extends EventEmitter {
 
   readonly masterPublicKey: bigint;
 
-  private readonly spendingPublicKey: SpendingPublicKey;
+  readonly spendingPublicKey: SpendingPublicKey;
 
   readonly nullifyingKey: bigint;
 

@@ -1,4 +1,4 @@
-import { RailgunWallet } from '../wallet/railgun-wallet';
+import { AbstractWallet } from '../wallet/abstract-wallet';
 import { Prover, ProverProgressCallback } from '../prover/prover';
 import { ByteLength, ByteUtils } from '../utils/bytes';
 import { AdaptID, NFTTokenData, TokenData, TokenType } from '../models/formatted-types';
@@ -131,14 +131,14 @@ class Transaction {
    * @param encryptionKey - encryption key of wallet
    */
   async generateTransactionRequest(
-    wallet: RailgunWallet,
+    wallet: AbstractWallet,
     txidVersion: TXIDVersion,
     encryptionKey: string,
     globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct,
   ): Promise<RailgunTransactionRequest> {
     const merkletree = wallet.getUTXOMerkletree(txidVersion, this.chain);
     const merkleRoot = await merkletree.getRoot(this.spendingTree);
-    const spendingKey = await wallet.getSpendingKeyPair(encryptionKey);
+    const spendingPublicKey = wallet.spendingPublicKey;
     const nullifyingKey = wallet.getNullifyingKey();
     const senderViewingKeys = wallet.getViewingKeyPair();
 
@@ -208,7 +208,7 @@ class Transaction {
       pathElements,
       leavesIndices: pathIndices,
       valueOut: allOutputs.map((note) => note.value),
-      publicKey: spendingKey.pubkey,
+      publicKey: spendingPublicKey,
       npkOut: allOutputs.map((x) => x.notePublicKey),
       nullifyingKey,
     };

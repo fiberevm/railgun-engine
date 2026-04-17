@@ -1,4 +1,4 @@
-import { RailgunWallet } from '../wallet/railgun-wallet';
+import { AbstractWallet } from '../wallet/abstract-wallet';
 import { Prover, ProverProgressCallback } from '../prover/prover';
 import { AdaptID, TokenData } from '../models/formatted-types';
 import { TXO, UnshieldData } from '../models/txo-types';
@@ -34,7 +34,7 @@ declare class Transaction {
      * @param wallet - wallet to spend from
      * @param encryptionKey - encryption key of wallet
      */
-    generateTransactionRequest(wallet: RailgunWallet, txidVersion: TXIDVersion, encryptionKey: string, globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct): Promise<RailgunTransactionRequest>;
+    generateTransactionRequest(wallet: AbstractWallet, txidVersion: TXIDVersion, encryptionKey: string, globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct): Promise<RailgunTransactionRequest>;
     /**
      * Generate proof and return serialized transaction
      * @param prover - prover to use
