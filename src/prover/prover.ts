@@ -41,6 +41,8 @@ export type SnarkJSGroth16 = {
     wasm: Optional<ArrayLike<number>>,
     zkey: ArrayLike<number>,
     logger: { debug: (log: string) => void },
+    wtnsCalcOptions?: { singleThread?: boolean },
+    proverOptions?: { singleThread?: boolean },
   ) => Promise<{ proof: Proof; publicSignals: string[] }>;
   verify: Groth16Verify;
 };
@@ -92,6 +94,8 @@ export class Prover {
             wasm,
             zkey,
             suppressDebugLogger,
+            { singleThread: true },
+            { singleThread: true },
           );
           progressService.stop();
           return proof;

@@ -33,7 +33,7 @@ class Prover {
                 // eslint-disable-next-line @typescript-eslint/no-floating-promises
                 progressService.progressSteadily(progressCallback);
                 try {
-                    const proof = await snarkJSGroth16.fullProve(formattedInputs, wasm, zkey, suppressDebugLogger);
+                    const proof = await snarkJSGroth16.fullProve(formattedInputs, wasm, zkey, suppressDebugLogger, { singleThread: true }, { singleThread: true });
                     progressService.stop();
                     return proof;
                 }
