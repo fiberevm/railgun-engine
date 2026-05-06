@@ -21,7 +21,7 @@ import { recursivelyDecodeResult } from '../../../utils/ethers';
 import { TypedContractEvent, TypedEventLog } from '../../../abi/typechain/common';
 import { Nullifier } from '../../../models/formatted-types';
 
-const SCAN_CHUNKS = 499;
+const SCAN_CHUNKS = 10000;
 const MAX_SCAN_RETRIES = 30;
 const EVENTS_SCAN_TIMEOUT = 5000;
 const SCAN_TIMEOUT_ERROR_MESSAGE = 'getLogs request timed out after 5 seconds.';

@@ -54,7 +54,7 @@ import { ShieldEvent as ShieldEvent_LegacyShield_PreMar23 } from '../../../abi/t
 import { TXIDVersion } from '../../../models/poi-types';
 import { recursivelyDecodeResult } from '../../../utils/ethers';
 
-const SCAN_CHUNKS = 499;
+const SCAN_CHUNKS = 10000;
 const MAX_SCAN_RETRIES = 30;
 const EVENTS_SCAN_TIMEOUT = 5000;
 const SCAN_TIMEOUT_ERROR_MESSAGE = 'getLogs request timed out after 5 seconds.';
