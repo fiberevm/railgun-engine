@@ -1,6 +1,6 @@
 /* eslint-disable no-await-in-loop */
 import { Signature } from '@railgun-community/circomlibjs';
-import type { PutBatch } from 'abstract-leveldown';
+import type { AbstractBatch, PutBatch } from 'abstract-leveldown';
 import EventEmitter from 'events';
 import msgpack from 'msgpack-lite';
 import { ContractTransaction } from 'ethers';
@@ -2048,6 +2048,41 @@ abstract class AbstractWallet extends EventEmitter {
     await this.db.put(this.getWalletDetailsPath(chain), msgpack.encode(walletDetailsMap));
 
     this.invalidateCommitmentsCache(chain);
+  }
+
+  /** Clears balances for one TXID version without removing sibling-version data. */
+  async clearDecryptedBalances(txidVersion: TXIDVersion, chain: Chain) {
+    this.isClearingBalances.set(null, chain, true);
+    try {
+      const [walletDetailsMap, receivedCommitments, sentCommitments] = await Promise.all([
+        this.getWalletDetailsMap(chain),
+        this.queryAllStoredReceiveCommitments(txidVersion, chain),
+        this.queryAllStoredSendCommitments(txidVersion, chain),
+      ]);
+      const deleteBatch: AbstractBatch[] = [
+        ...receivedCommitments.map(({ tree, position }) => ({
+          type: 'del' as const,
+          key: this.getWalletReceiveCommitmentDBPrefix(chain, tree, position).join(':'),
+        })),
+        ...sentCommitments.map(({ tree, position }) => ({
+          type: 'del' as const,
+          key: this.getWalletSentCommitmentDBPrefix(chain, tree, position).join(':'),
+        })),
+      ];
+      await this.db.batch(deleteBatch);
+
+      const walletDetails = walletDetailsMap[txidVersion];
+      if (isDefined(walletDetails)) {
+        walletDetails.treeScannedHeights = [];
+        walletDetails.creationTree = undefined;
+        walletDetails.creationTreeHeight = undefined;
+        await this.db.put(this.getWalletDetailsPath(chain), msgpack.encode(walletDetailsMap));
+      }
+      this.receiveCommitmentsCache.del(txidVersion, chain);
+      this.sentCommitmentsCache.del(txidVersion, chain);
+    } finally {
+      this.isClearingBalances.set(null, chain, false);
+    }
   }
 
   /**

@@ -180,6 +180,7 @@ declare class RailgunEngine extends EventEmitter {
     /** Returns independent commitment and nullifier coverage for one version and chain. */
     getFinalizedScanCursors(txidVersion: TXIDVersion, chain: Chain): Promise<RailgunFinalizedScanCursorState>;
     private clearFinalizedScanCursors;
+    private clearFinalizedScanStateForCanonicalReplay;
     private getFinalizedScanStartBlock;
     /**
      * Sets last synced block to resume syncing on next load.
