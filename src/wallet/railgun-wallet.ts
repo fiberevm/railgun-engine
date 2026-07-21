@@ -1,3 +1,4 @@
+/* eslint-disable max-classes-per-file */
 import { Signature } from '@railgun-community/circomlibjs';
 import { poseidon } from '../utils/poseidon';
 import { Database } from '../database/database';
@@ -7,7 +8,7 @@ import { ByteLength, ByteUtils } from '../utils/bytes';
 import { sha256 } from '../utils/hash';
 import { AbstractWallet } from './abstract-wallet';
 import { Mnemonic } from '../key-derivation/bip39';
-import { PublicInputsRailgun } from '../models';
+import { PublicInputsRailgun, RailgunTransactionSigningData } from '../models';
 import { signEDDSA, getPublicViewingKey } from '../utils/keys-utils';
 import { Prover } from '../prover/prover';
 
@@ -22,11 +23,17 @@ class RailgunWallet extends AbstractWallet {
     return node.getSpendingKeyPair();
   }
 
-  async sign(publicInputs: PublicInputsRailgun, encryptionKey: string): Promise<Signature> {
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  async sign(
+    publicInputs: PublicInputsRailgun,
+    encryptionKey: string,
+    _signingData?: RailgunTransactionSigningData,
+  ): Promise<Signature> {
     const spendingKeyPair = await this.getSpendingKeyPair(encryptionKey);
     const msg = poseidon([publicInputs.merkleRoot, publicInputs.boundParamsHash, ...publicInputs.nullifiers, ...publicInputs.commitmentsOut]);
     return signEDDSA(spendingKeyPair.privateKey, msg);
   }
+  /* eslint-enable @typescript-eslint/no-unused-vars */
 
   /**
    * Load encrypted node from database with encryption key
@@ -135,7 +142,10 @@ class RailgunWallet extends AbstractWallet {
   }
 }
 
-export type SignDelegate = (publicInputs: PublicInputsRailgun) => Promise<Signature>;
+export type SignDelegate = (
+  publicInputs: PublicInputsRailgun,
+  signingData?: RailgunTransactionSigningData,
+) => Promise<Signature>;
 
 class DelegatedSignWallet extends AbstractWallet {
   private readonly signDelegate: SignDelegate;
@@ -153,8 +163,12 @@ class DelegatedSignWallet extends AbstractWallet {
     this.signDelegate = signDelegate;
   }
 
-  async sign(publicInputs: PublicInputsRailgun, _encryptionKey: string): Promise<Signature> {
-    return this.signDelegate(publicInputs);
+  async sign(
+    publicInputs: PublicInputsRailgun,
+    _encryptionKey: string,
+    signingData?: RailgunTransactionSigningData,
+  ): Promise<Signature> {
+    return this.signDelegate(publicInputs, signingData);
   }
 
   private static generateID(

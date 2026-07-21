@@ -1,11 +1,11 @@
 /// <reference path="../../src/types/global.d.ts" />
 import { Signature } from '@railgun-community/circomlibjs';
 import { Database } from '../database/database';
-import { PublicInputsRailgun } from '../models';
+import { PublicInputsRailgun, RailgunTransactionSigningData } from '../models';
 import { AbstractWallet } from './abstract-wallet';
 import { Prover } from '../prover/prover';
 declare class ViewOnlyWallet extends AbstractWallet {
-    sign(_publicInputs: PublicInputsRailgun, _encryptionKey: string): Promise<Signature>;
+    sign(_publicInputs: PublicInputsRailgun, _encryptionKey: string, _signingData?: RailgunTransactionSigningData): Promise<Signature>;
     /**
      * Calculate Wallet ID from mnemonic and derivation path index
      * @returns {string} hash of mnemonic and index

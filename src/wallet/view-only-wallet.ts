@@ -1,7 +1,7 @@
 import { Signature } from '@railgun-community/circomlibjs';
 import { Database } from '../database/database';
 import { ViewingKeyPair } from '../key-derivation/wallet-node';
-import { PublicInputsRailgun } from '../models';
+import { PublicInputsRailgun, RailgunTransactionSigningData } from '../models';
 import { ViewOnlyWalletData } from '../models/wallet-types';
 import { ByteUtils } from '../utils/bytes';
 import { sha256 } from '../utils/hash';
@@ -10,10 +10,16 @@ import { AbstractWallet } from './abstract-wallet';
 import { Prover } from '../prover/prover';
 
 class ViewOnlyWallet extends AbstractWallet {
-  // eslint-disable-next-line class-methods-use-this, @typescript-eslint/no-unused-vars
-  sign(_publicInputs: PublicInputsRailgun, _encryptionKey: string): Promise<Signature> {
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  // eslint-disable-next-line class-methods-use-this
+  sign(
+    _publicInputs: PublicInputsRailgun,
+    _encryptionKey: string,
+    _signingData?: RailgunTransactionSigningData,
+  ): Promise<Signature> {
     throw new Error('View-Only wallet cannot generate signatures.');
   }
+  /* eslint-enable @typescript-eslint/no-unused-vars */
 
   /**
    * Calculate Wallet ID from mnemonic and derivation path index

@@ -1,4 +1,3 @@
-import { BigNumberish } from 'ethers';
 import { Prover } from '../prover/prover';
 import { HashZero } from '../utils/bytes';
 import { findExactSolutionsOverTargetValue } from '../solutions/simple-solutions';
@@ -16,19 +15,15 @@ import {
 import { stringifySafe } from '../utils/stringify';
 import { Chain } from '../models/engine-types';
 import { TransactNote } from '../note/transact-note';
-import {
-  TXIDVersion,
-  TreeBalance,
-  UnprovedTransactionInputs,
-} from '../models';
+import { PreparedRailgunTransaction, TXIDVersion, TreeBalance } from '../models';
 import { getTokenDataHash } from '../note/note-util';
 import { AbstractWallet } from '../wallet';
-import { BoundParamsStruct } from '../abi/typechain/RailgunSmartWallet';
 import { isDefined } from '../utils/is-defined';
 import { PoseidonMerkleVerifier } from '../abi/typechain';
 import { Memo } from '../note/memo';
 import WalletInfo from '../wallet/wallet-info';
 import { ZERO_ADDRESS } from '../utils/constants';
+import { assertPreparedRailgunTransactionV2 } from './prepared-transaction';
 
 export const GAS_ESTIMATE_VARIANCE_DUMMY_TO_ACTUAL_TRANSACTION = 9000;
 
@@ -352,6 +347,127 @@ export class TransactionBatch {
   }
 
   /**
+   * Prepare exact unsigned inputs without asking the wallet to sign or generating proofs.
+   * Prepared data includes private witness fields and must be stored as sensitive data.
+   * @param wallet - wallet to spend from
+   * @param txidVersion - transaction protocol version
+   * @param encryptionKey - encryption key for wallet
+   * @returns prepared transactions that can be authorized and proved later
+   */
+  async prepareTransactions(
+    wallet: AbstractWallet,
+    txidVersion: TXIDVersion,
+    encryptionKey: string,
+    originShieldTxidForSpendabilityOverride?: string,
+  ): Promise<{
+    preparedTransactions: PreparedRailgunTransaction[];
+  }> {
+    const spendingSolutionGroups = await this.generateValidSpendingSolutionGroupsAllOutputs(
+      wallet,
+      txidVersion,
+      originShieldTxidForSpendabilityOverride,
+    );
+    EngineDebug.log('Actual spending solution groups:');
+    EngineDebug.log(
+      stringifySafe(
+        serializeExtractedSpendingSolutionGroupsData(
+          extractSpendingSolutionGroupsData(spendingSolutionGroups),
+        ),
+      ),
+    );
+
+    const transactionDatas = spendingSolutionGroups.map((spendingSolutionGroup) => {
+      const changeOutput = TransactionBatch.getChangeOutput(wallet, spendingSolutionGroup);
+      const transaction = this.generateTransactionForSpendingSolutionGroup(
+        spendingSolutionGroup,
+        changeOutput,
+      );
+      const outputTypes = spendingSolutionGroup.tokenOutputs.map(
+        (output) => output.outputType as OutputType,
+      );
+      if (changeOutput) {
+        outputTypes.push(OutputType.Change);
+      }
+      return { transaction, outputTypes };
+    });
+
+    const { walletSource } = WalletInfo;
+    const orderedOutputTypes = transactionDatas.map(({ outputTypes }) => outputTypes).flat();
+    const globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct = {
+      minGasPrice: this.overallBatchMinGasPrice,
+      chainID: this.chain.id,
+      senderCiphertext: Memo.createSenderAnnotationEncryptedV3(
+        walletSource,
+        orderedOutputTypes,
+        wallet.viewingKeyPair.privateKey,
+      ),
+      to: ZERO_ADDRESS, // TODO-V3: Add RelayAdapt contract address
+      data: '0x', // TODO-V3: Add RelayAdapt encoded calldata
+    };
+
+    const preparedTransactions: PreparedRailgunTransaction[] = [];
+    for (const { transaction } of transactionDatas) {
+      // Preparing serially preserves existing output and progress ordering.
+      // eslint-disable-next-line no-await-in-loop
+      const preparedTransaction = await transaction.generatePreparedTransaction(
+        wallet,
+        txidVersion,
+        encryptionKey,
+        globalBoundParams,
+      );
+      preparedTransactions.push(preparedTransaction);
+    }
+
+    return { preparedTransactions };
+  }
+
+  /**
+   * Sign and prove requests returned by prepareTransactions without rebuilding transaction data.
+   */
+  // eslint-disable-next-line class-methods-use-this
+  async generateTransactionsFromPrepared(
+    prover: Prover,
+    wallet: AbstractWallet,
+    encryptionKey: string,
+    preparedTransactions: PreparedRailgunTransaction[],
+    progressCallback: (progress: number, status: string) => void,
+  ): Promise<{
+    provedTransactions: (TransactionStructV2 | TransactionStructV3)[];
+  }> {
+    const provedTransactions: (TransactionStructV2 | TransactionStructV3)[] = [];
+
+    for (let index = 0; index < preparedTransactions.length; index += 1) {
+      const preparedTransaction = preparedTransactions[index];
+      if (preparedTransaction.txidVersion === TXIDVersion.V2_PoseidonMerkle) {
+        assertPreparedRailgunTransactionV2(preparedTransaction);
+      }
+      const signingData = Transaction.getSigningData(preparedTransaction);
+
+      // Delegated signers can now bind the signature to exact bound params and unshield output.
+      // eslint-disable-next-line no-await-in-loop
+      const signature = await wallet.sign(
+        preparedTransaction.publicInputs,
+        encryptionKey,
+        signingData,
+      );
+      const preTransactionProofProgressStatus = `Generating transaction proof ${index + 1}/${
+        preparedTransactions.length
+      }...`;
+
+      // eslint-disable-next-line no-await-in-loop
+      const provedTransaction = await Transaction.generateProvedTransactionFromPrepared(
+        prover,
+        preparedTransaction,
+        signature,
+        (progress: number) => progressCallback(progress, preTransactionProofProgressStatus),
+      );
+      provedTransactions.push(provedTransaction);
+    }
+
+    return { provedTransactions };
+  }
+
+  /**
    * Generate proofs and return serialized transactions
    * @param prover - prover to use
    * @param wallet - wallet to spend from
@@ -369,119 +485,19 @@ export class TransactionBatch {
   ): Promise<{
     provedTransactions: (TransactionStructV2 | TransactionStructV3)[];
   }> {
-    const spendingSolutionGroups = await this.generateValidSpendingSolutionGroupsAllOutputs(
+    const { preparedTransactions } = await this.prepareTransactions(
       wallet,
       txidVersion,
+      encryptionKey,
       originShieldTxidForSpendabilityOverride,
     );
-    EngineDebug.log('Actual spending solution groups:');
-    EngineDebug.log(
-      stringifySafe(
-        serializeExtractedSpendingSolutionGroupsData(
-          extractSpendingSolutionGroupsData(spendingSolutionGroups),
-        ),
-      ),
+    return this.generateTransactionsFromPrepared(
+      prover,
+      wallet,
+      encryptionKey,
+      preparedTransactions,
+      progressCallback,
     );
-
-    const provedTransactions: (TransactionStructV2 | TransactionStructV3)[] = [];
-
-    const transactionDatas = spendingSolutionGroups.map((spendingSolutionGroup) => {
-      const changeOutput = TransactionBatch.getChangeOutput(wallet, spendingSolutionGroup);
-      const transaction = this.generateTransactionForSpendingSolutionGroup(
-        spendingSolutionGroup,
-        changeOutput,
-      );
-      const outputTypes = spendingSolutionGroup.tokenOutputs.map(
-        (output) => output.outputType as OutputType,
-      );
-      if (changeOutput) {
-        outputTypes.push(OutputType.Change);
-      }
-      return {
-        transaction,
-        outputTypes,
-        utxos: spendingSolutionGroup.utxos,
-        hasUnshield: spendingSolutionGroup.unshieldValue > 0n,
-      };
-    });
-
-    const { walletSource } = WalletInfo;
-    const orderedOutputTypes = transactionDatas.map(({ outputTypes }) => outputTypes).flat();
-
-    const globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct = {
-      minGasPrice: this.overallBatchMinGasPrice,
-      chainID: this.chain.id,
-      senderCiphertext: Memo.createSenderAnnotationEncryptedV3(
-        walletSource,
-        orderedOutputTypes,
-        wallet.viewingKeyPair.privateKey,
-      ),
-      to: ZERO_ADDRESS, // TODO-V3: Add RelayAdapt contract address
-      data: '0x', // TODO-V3: Add RelayAdapt encoded calldata
-    };
-
-    for (let index = 0; index < transactionDatas.length; index += 1) {
-      const { transaction, utxos, hasUnshield } = transactionDatas[index];
-
-      const { publicInputs, privateInputs, boundParams } =
-        // eslint-disable-next-line no-await-in-loop
-        await transaction.generateTransactionRequest(
-          wallet,
-          txidVersion,
-          encryptionKey,
-          globalBoundParams,
-        );
-
-      // eslint-disable-next-line no-await-in-loop
-      const signature = await wallet.sign(publicInputs, encryptionKey);
-
-      // Specific types per TXIDVersion
-      let treeNumber: BigNumberish;
-      let unprovedTransactionInputs: UnprovedTransactionInputs;
-      switch (txidVersion) {
-        case TXIDVersion.V2_PoseidonMerkle: {
-          const boundParamsVersioned = boundParams as BoundParamsStruct;
-          treeNumber = boundParamsVersioned.treeNumber;
-          unprovedTransactionInputs = {
-            txidVersion,
-            privateInputs,
-            publicInputs,
-            boundParams: boundParamsVersioned,
-            signature: [...signature.R8, signature.S],
-          };
-          break;
-        }
-        case TXIDVersion.V3_PoseidonMerkle: {
-          const boundParamsVersioned = boundParams as PoseidonMerkleVerifier.BoundParamsStruct;
-          treeNumber = boundParamsVersioned.local.treeNumber;
-          unprovedTransactionInputs = {
-            txidVersion,
-            privateInputs,
-            publicInputs,
-            boundParams: boundParamsVersioned,
-            signature: [...signature.R8, signature.S],
-          };
-          break;
-        }
-      }
-
-      // NOTE: For multisig, at this point the UnprovedTransactionInputs are
-      // forwarded to the next participant, along with an array of signatures.
-
-      const preTransactionProofProgressStatus = `Generating transaction proof ${index + 1}/${
-        spendingSolutionGroups.length
-      }...`;
-
-      // eslint-disable-next-line no-await-in-loop
-      const provedTransaction = await transaction.generateProvedTransaction(
-        txidVersion,
-        prover,
-        unprovedTransactionInputs,
-        (progress: number) => progressCallback(progress, preTransactionProofProgressStatus),
-      );
-      provedTransactions.push(provedTransaction);
-    }
-    return { provedTransactions };
   }
 
   private static logDummySpendingSolutionGroupsSummary(

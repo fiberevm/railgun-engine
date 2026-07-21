@@ -18,11 +18,13 @@ class RailgunWallet extends abstract_wallet_1.AbstractWallet {
         const node = await this.loadSpendingKey(encryptionKey);
         return node.getSpendingKeyPair();
     }
-    async sign(publicInputs, encryptionKey) {
+    /* eslint-disable @typescript-eslint/no-unused-vars */
+    async sign(publicInputs, encryptionKey, _signingData) {
         const spendingKeyPair = await this.getSpendingKeyPair(encryptionKey);
         const msg = (0, poseidon_1.poseidon)([publicInputs.merkleRoot, publicInputs.boundParamsHash, ...publicInputs.nullifiers, ...publicInputs.commitmentsOut]);
         return (0, keys_utils_1.signEDDSA)(spendingKeyPair.privateKey, msg);
     }
+    /* eslint-enable @typescript-eslint/no-unused-vars */
     /**
      * Load encrypted node from database with encryption key
      * @param {BytesData} encryptionKey
@@ -89,8 +91,8 @@ class DelegatedSignWallet extends abstract_wallet_1.AbstractWallet {
         super(id, db, viewingKeyPair, spendingPublicKey, creationBlockNumbers, prover);
         this.signDelegate = signDelegate;
     }
-    async sign(publicInputs, _encryptionKey) {
-        return this.signDelegate(publicInputs);
+    async sign(publicInputs, _encryptionKey, signingData) {
+        return this.signDelegate(publicInputs, signingData);
     }
     static generateID(viewingPrivateKey, spendingPublicKey) {
         const combined = bytes_1.ByteUtils.fastBytesToHex(viewingPrivateKey)

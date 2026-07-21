@@ -5,7 +5,7 @@ import { AdaptID, TokenData } from '../models/formatted-types';
 import { TransactionStructV2, TransactionStructV3 } from '../models/transaction-types';
 import { Chain } from '../models/engine-types';
 import { TransactNote } from '../note/transact-note';
-import { TXIDVersion, TreeBalance } from '../models';
+import { PreparedRailgunTransaction, TXIDVersion, TreeBalance } from '../models';
 import { AbstractWallet } from '../wallet';
 export declare const GAS_ESTIMATE_VARIANCE_DUMMY_TO_ACTUAL_TRANSACTION = 9000;
 export declare class TransactionBatch {
@@ -42,6 +42,23 @@ export declare class TransactionBatch {
      */
     createComplexSatisfyingSpendingSolutionGroups(tokenData: TokenData, tokenOutputs: TransactNote[], treeSortedBalances: TreeBalance[]): SpendingSolutionGroup[];
     static getChangeOutput(wallet: AbstractWallet, spendingSolutionGroup: SpendingSolutionGroup): Optional<TransactNote>;
+    /**
+     * Prepare exact unsigned inputs without asking the wallet to sign or generating proofs.
+     * Prepared data includes private witness fields and must be stored as sensitive data.
+     * @param wallet - wallet to spend from
+     * @param txidVersion - transaction protocol version
+     * @param encryptionKey - encryption key for wallet
+     * @returns prepared transactions that can be authorized and proved later
+     */
+    prepareTransactions(wallet: AbstractWallet, txidVersion: TXIDVersion, encryptionKey: string, originShieldTxidForSpendabilityOverride?: string): Promise<{
+        preparedTransactions: PreparedRailgunTransaction[];
+    }>;
+    /**
+     * Sign and prove requests returned by prepareTransactions without rebuilding transaction data.
+     */
+    generateTransactionsFromPrepared(prover: Prover, wallet: AbstractWallet, encryptionKey: string, preparedTransactions: PreparedRailgunTransaction[], progressCallback: (progress: number, status: string) => void): Promise<{
+        provedTransactions: (TransactionStructV2 | TransactionStructV3)[];
+    }>;
     /**
      * Generate proofs and return serialized transactions
      * @param prover - prover to use

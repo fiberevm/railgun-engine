@@ -74,7 +74,7 @@ import {
 } from '../note/note-util';
 import { TokenDataGetter } from '../token/token-data-getter';
 import { isDefined, removeDuplicates, removeUndefineds } from '../utils/is-defined';
-import { PublicInputsRailgun } from '../models/prover-types';
+import { PublicInputsRailgun, RailgunTransactionSigningData } from '../models/prover-types';
 import { UTXOMerkletree } from '../merkletree/utxo-merkletree';
 import {
   isShieldCommitmentType,
@@ -2082,7 +2082,11 @@ abstract class AbstractWallet extends EventEmitter {
     }
   }
 
-  abstract sign(publicInputs: PublicInputsRailgun, encryptionKey: string): Promise<Signature>;
+  abstract sign(
+    publicInputs: PublicInputsRailgun,
+    encryptionKey: string,
+    signingData?: RailgunTransactionSigningData,
+  ): Promise<Signature>;
 
   static dbPath(id: string): BytesData[] {
     return [fromUTF8String('wallet'), id];

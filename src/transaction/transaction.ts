@@ -1,3 +1,4 @@
+import { Signature } from '@railgun-community/circomlibjs';
 import { AbstractWallet } from '../wallet/abstract-wallet';
 import { Prover, ProverProgressCallback } from '../prover/prover';
 import { ByteLength, ByteUtils } from '../utils/bytes';
@@ -9,9 +10,11 @@ import { TXO, UnshieldData } from '../models/txo-types';
 import { Chain } from '../models/engine-types';
 import { TransactNote } from '../note/transact-note';
 import {
+  PreparedRailgunTransaction,
   UnprovedTransactionInputs,
   Proof,
   PublicInputsRailgun,
+  RailgunTransactionSigningData,
   RailgunTransactionRequest,
   PrivateInputsRailgun,
   RailgunTransactionRequestV2,
@@ -138,7 +141,7 @@ class Transaction {
   ): Promise<RailgunTransactionRequest> {
     const merkletree = wallet.getUTXOMerkletree(txidVersion, this.chain);
     const merkleRoot = await merkletree.getRoot(this.spendingTree);
-    const spendingPublicKey = wallet.spendingPublicKey;
+    const { spendingPublicKey } = wallet;
     const nullifyingKey = wallet.getNullifyingKey();
     const senderViewingKeys = wallet.getViewingKeyPair();
 
@@ -341,6 +344,52 @@ class Transaction {
   }
 
   /**
+   * Builds unsigned proof inputs and captures the matching public transaction semantics once.
+   * Callers may authorize this object now and prove this same object later.
+   */
+  async generatePreparedTransaction(
+    wallet: AbstractWallet,
+    txidVersion: TXIDVersion,
+    encryptionKey: string,
+    globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct,
+  ): Promise<PreparedRailgunTransaction> {
+    const transactionRequest = await this.generateTransactionRequest(
+      wallet,
+      txidVersion,
+      encryptionKey,
+      globalBoundParams,
+    );
+
+    return {
+      ...transactionRequest,
+      unshieldPreimage: Transaction.formatUnshieldPreimage(this.unshieldNote.preImage),
+    } as PreparedRailgunTransaction;
+  }
+
+  static getSigningData(
+    preparedTransaction: PreparedRailgunTransaction,
+  ): RailgunTransactionSigningData {
+    const { publicInputs, boundParams, unshieldPreimage } = preparedTransaction;
+    switch (preparedTransaction.txidVersion) {
+      case TXIDVersion.V2_PoseidonMerkle:
+        return {
+          txidVersion: preparedTransaction.txidVersion,
+          publicInputs,
+          boundParams: boundParams as BoundParamsStruct,
+          unshieldPreimage,
+        };
+      case TXIDVersion.V3_PoseidonMerkle:
+        return {
+          txidVersion: preparedTransaction.txidVersion,
+          publicInputs,
+          boundParams: boundParams as PoseidonMerkleVerifier.BoundParamsStruct,
+          unshieldPreimage,
+        };
+    }
+    throw new Error('Invalid txidVersion.');
+  }
+
+  /**
    * Generate proof and return serialized transaction
    * @param prover - prover to use
    * @param wallet - wallet to spend from
@@ -353,12 +402,46 @@ class Transaction {
     unprovedTransactionInputs: UnprovedTransactionInputs,
     progressCallback: ProverProgressCallback,
   ): Promise<TransactionStructV2 | TransactionStructV3> {
+    return Transaction.proveTransaction(
+      prover,
+      unprovedTransactionInputs,
+      this.unshieldNote.preImage,
+      progressCallback,
+    );
+  }
+
+  /** Proves an earlier prepared request without rebuilding any signed transaction fields. */
+  static async generateProvedTransactionFromPrepared(
+    prover: Prover,
+    preparedTransaction: PreparedRailgunTransaction,
+    signature: Signature,
+    progressCallback: ProverProgressCallback,
+  ): Promise<TransactionStructV2 | TransactionStructV3> {
+    const unprovedTransactionInputs = {
+      ...preparedTransaction,
+      signature: [...signature.R8, signature.S],
+    } as UnprovedTransactionInputs;
+
+    return Transaction.proveTransaction(
+      prover,
+      unprovedTransactionInputs,
+      preparedTransaction.unshieldPreimage,
+      progressCallback,
+    );
+  }
+
+  private static async proveTransaction(
+    prover: Prover,
+    unprovedTransactionInputs: UnprovedTransactionInputs,
+    unshieldPreimage: CommitmentPreimageStruct,
+    progressCallback: ProverProgressCallback,
+  ): Promise<TransactionStructV2 | TransactionStructV3> {
     const { publicInputs, privateInputs, boundParams } = unprovedTransactionInputs;
 
     Transaction.assertCanProve(privateInputs);
 
     const { proof } = await prover.proveRailgun(
-      txidVersion,
+      unprovedTransactionInputs.txidVersion,
       unprovedTransactionInputs,
       progressCallback,
     );
@@ -370,7 +453,7 @@ class Transaction {
           proof,
           publicInputs,
           boundParams as BoundParamsStruct,
-          this.unshieldNote.preImage,
+          unshieldPreimage,
         );
       }
       case TXIDVersion.V3_PoseidonMerkle: {
@@ -379,7 +462,7 @@ class Transaction {
           proof,
           publicInputs,
           boundParams as PoseidonMerkleVerifier.BoundParamsStruct,
-          this.unshieldNote.preImage,
+          unshieldPreimage,
         );
       }
     }
@@ -452,11 +535,7 @@ class Transaction {
       commitments: publicInputs.commitmentsOut.map((n) =>
         ByteUtils.nToHex(n, ByteLength.UINT_256, true),
       ),
-      unshieldPreimage: {
-        npk: ByteUtils.formatToByteLength(unshieldPreimage.npk, ByteLength.UINT_256, true),
-        token: unshieldPreimage.token,
-        value: unshieldPreimage.value,
-      },
+      unshieldPreimage: Transaction.formatUnshieldPreimage(unshieldPreimage),
     };
   }
 
@@ -478,11 +557,17 @@ class Transaction {
       commitments: publicInputs.commitmentsOut.map((n) =>
         ByteUtils.nToHex(n, ByteLength.UINT_256, true),
       ),
-      unshieldPreimage: {
-        npk: ByteUtils.formatToByteLength(unshieldPreimage.npk, ByteLength.UINT_256, true),
-        token: unshieldPreimage.token,
-        value: unshieldPreimage.value,
-      },
+      unshieldPreimage: Transaction.formatUnshieldPreimage(unshieldPreimage),
+    };
+  }
+
+  private static formatUnshieldPreimage(
+    unshieldPreimage: CommitmentPreimageStruct,
+  ): CommitmentPreimageStruct {
+    return {
+      npk: ByteUtils.formatToByteLength(unshieldPreimage.npk, ByteLength.UINT_256, true),
+      token: unshieldPreimage.token,
+      value: unshieldPreimage.value,
     };
   }
 
