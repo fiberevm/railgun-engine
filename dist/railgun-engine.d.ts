@@ -88,6 +88,10 @@ declare class RailgunEngine extends EventEmitter {
      * @param walletIdFilter - optional list of wallet ids to decrypt balances
      */
     scanContractHistory(chain: Chain, walletIdFilter: Optional<string[]>): Promise<void>;
+    /** Scans V2 history and proves selected wallet balances cover a minimum block. */
+    scanWalletBalancesThroughBlock(txidVersion: TXIDVersion, chain: Chain, walletIdFilter: string[], minimumBlockNumber: number): Promise<{
+        scannedThroughBlock: number;
+    }>;
     /**
      * Scan (via quick sync or slow sync) on-chain data for the UTXO merkletree.
      */
@@ -157,6 +161,8 @@ declare class RailgunEngine extends EventEmitter {
      * @returns lastSyncedBlock - last synced block
      */
     private getLastSyncedBlock;
+    /** Confirms the durable slow-scan cursor covers the requested block and current provider view. */
+    private getValidatedWalletScanCursor;
     private static getUTXOMerkletreeHistoryVersionDBPrefix;
     private static getTxidV2MerkletreeHistoryVersionDBPrefix;
     private setUTXOMerkletreeHistoryVersion;
@@ -169,6 +175,8 @@ declare class RailgunEngine extends EventEmitter {
     private hasTXIDMerkletree;
     getCompletedTxidFromNullifiers(txidVersion: TXIDVersion, chain: Chain, nullifiers: string[]): Promise<Optional<string>>;
     private decryptBalancesAllWallets;
+    /** Makes balance decryption errors visible to callers that need a complete snapshot. */
+    private assertWalletBalancesDecrypted;
     private invalidateTXOsCacheAllWallets;
     private allWallets;
     /**

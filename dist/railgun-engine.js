@@ -253,7 +253,7 @@ class RailgunEngine extends events_1.default {
         }
         return startScanningBlock;
     }
-    async performQuickSync(txidVersion, chain, endProgress, retryCount = 0) {
+    async performQuickSync(txidVersion, chain, endProgress, retryCount = 0, throwOnFailure = false) {
         try {
             debugger_1.default.log(`[${txidVersion}] quickSync: chain ${chain.type}:${chain.id}`);
             const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
@@ -283,8 +283,11 @@ class RailgunEngine extends events_1.default {
         }
         catch (cause) {
             if (retryCount < 1) {
-                await this.performQuickSync(txidVersion, chain, endProgress, retryCount + 1);
+                await this.performQuickSync(txidVersion, chain, endProgress, retryCount + 1, throwOnFailure);
                 return;
+            }
+            if (throwOnFailure) {
+                throw new Error('Failed to quick sync', { cause });
             }
             debugger_1.default.error(new Error('Failed to quick sync', { cause }));
         }
@@ -332,19 +335,52 @@ class RailgunEngine extends events_1.default {
         }
         await this.scanTXIDHistoryV2(chain);
     }
+    /** Scans V2 history and proves selected wallet balances cover a minimum block. */
+    async scanWalletBalancesThroughBlock(txidVersion, chain, walletIdFilter, minimumBlockNumber) {
+        if (txidVersion !== poi_types_1.TXIDVersion.V2_PoseidonMerkle) {
+            throw new Error('Wallet balance scan proof only supports V2 trees');
+        }
+        if (!Number.isSafeInteger(minimumBlockNumber) || minimumBlockNumber < 0) {
+            throw new Error('Minimum scan block must be a non-negative safe integer');
+        }
+        if (walletIdFilter.length === 0) {
+            throw new Error('Wallet balance scan proof requires at least one wallet');
+        }
+        let scannedThroughBlock;
+        await this.scanUTXOHistory(txidVersion, chain, walletIdFilter, {
+            minimumBlock: minimumBlockNumber,
+            throwOnFailure: true,
+            onValidatedScan: (blockNumber) => {
+                scannedThroughBlock = blockNumber;
+            },
+        });
+        if (!(0, is_defined_1.isDefined)(scannedThroughBlock) || scannedThroughBlock < minimumBlockNumber) {
+            throw new Error('Wallet balance scan did not reach its minimum block');
+        }
+        return { scannedThroughBlock };
+    }
     /**
      * Scan (via quick sync or slow sync) on-chain data for the UTXO merkletree.
      */
-    async scanUTXOHistory(txidVersion, chain, walletIdFilter) {
+    async scanUTXOHistory(txidVersion, chain, walletIdFilter, options = {}) {
         if (this.skipMerkletreeScans) {
+            if (options.throwOnFailure === true) {
+                throw new Error('Cannot prove wallet balances: merkletree scans are disabled');
+            }
             debugger_1.default.log(`Skipping merkletree scan: skipMerkletreeScans set on RAILGUN Engine.`);
             return;
         }
         if (!this.hasUTXOMerkletree(txidVersion, chain)) {
+            if (options.throwOnFailure === true) {
+                throw new Error('Cannot prove wallet balances: UTXO merkletree is not loaded');
+            }
             debugger_1.default.log(`Cannot scan history. UTXO merkletree not yet loaded for ${txidVersion}, chain ${chain.type}:${chain.id}.`);
             return;
         }
         if (!(0, is_defined_1.isDefined)(contract_store_1.ContractStore.railgunSmartWalletContracts.get(null, chain))) {
+            if (options.throwOnFailure === true) {
+                throw new Error('Cannot prove wallet balances: Railgun contract is not loaded');
+            }
             debugger_1.default.log(`Cannot scan history. Proxy contract not yet loaded for chain ${chain.type}:${chain.id}.`);
             return;
         }
@@ -357,6 +393,9 @@ class RailgunEngine extends events_1.default {
         const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
         if (utxoMerkletree.isScanning) {
             // Do not allow multiple simultaneous scans.
+            if (options.throwOnFailure === true) {
+                throw new Error('Cannot prove wallet balances while another scan is running');
+            }
             debugger_1.default.log('Already scanning. Stopping additional re-scan.');
             return;
         }
@@ -364,23 +403,60 @@ class RailgunEngine extends events_1.default {
         try {
             this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, 0.03); // 3%
             const postQuickSyncProgress = 0.5;
-            await this.performQuickSync(txidVersion, chain, postQuickSyncProgress);
+            let durableStrictCursor;
+            if (options.throwOnFailure === true) {
+                if (!(0, is_defined_1.isDefined)(options.minimumBlock) ||
+                    !Number.isSafeInteger(options.minimumBlock) ||
+                    options.minimumBlock < 0) {
+                    throw new Error('Strict wallet balance scan requires a valid minimum block');
+                }
+                durableStrictCursor = await this.getLastSyncedBlock(txidVersion, chain);
+                if ((0, is_defined_1.isDefined)(durableStrictCursor) &&
+                    (!Number.isSafeInteger(durableStrictCursor) || durableStrictCursor < 0)) {
+                    throw new Error('Wallet balance scan has an invalid durable cursor');
+                }
+            }
+            const strictHistoryAlreadyCovered = options.throwOnFailure === true &&
+                (0, is_defined_1.isDefined)(options.minimumBlock) &&
+                (0, is_defined_1.isDefined)(durableStrictCursor) &&
+                durableStrictCursor >= options.minimumBlock;
+            if (!strictHistoryAlreadyCovered) {
+                await this.performQuickSync(txidVersion, chain, postQuickSyncProgress, 0, options.throwOnFailure);
+            }
             this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, postQuickSyncProgress); // 50%
-            // Get updated start-scanning block from new valid utxoMerkletree.
-            const startScanningBlockSlowScan = await this.getNextStartingBlockSlowScan(txidVersion, chain);
-            debugger_1.default.log(`[${txidVersion}] startScanningBlockSlowScan: ${startScanningBlockSlowScan}`);
             const railgunSmartWalletContract = contract_store_1.ContractStore.railgunSmartWalletContracts.get(null, chain);
             if (!railgunSmartWalletContract?.contract.runner?.provider) {
                 throw new Error('Requires RailgunSmartWalletContract with provider');
             }
-            const latestBlock = await railgunSmartWalletContract.contract.runner.provider.getBlockNumber();
-            switch (txidVersion) {
-                case poi_types_1.TXIDVersion.V2_PoseidonMerkle:
-                    await this.slowSyncV2(chain, utxoMerkletree, startScanningBlockSlowScan, latestBlock, postQuickSyncProgress);
-                    break;
-                case poi_types_1.TXIDVersion.V3_PoseidonMerkle:
-                    await this.slowSyncV3(chain, utxoMerkletree, startScanningBlockSlowScan, latestBlock, postQuickSyncProgress);
-                    break;
+            const providerLatestBlock = await railgunSmartWalletContract.contract.runner.provider.getBlockNumber();
+            if ((0, is_defined_1.isDefined)(options.minimumBlock) && providerLatestBlock < options.minimumBlock) {
+                throw new Error('Provider has not reached the minimum wallet scan block');
+            }
+            if (!strictHistoryAlreadyCovered) {
+                let startScanningBlockSlowScan;
+                if (options.throwOnFailure === true) {
+                    // Strict scans resume from durable history, not a quick-sync commitment height.
+                    const strictStartBlock = durableStrictCursor ?? this.deploymentBlocks.get(txidVersion, chain);
+                    if (!(0, is_defined_1.isDefined)(strictStartBlock)) {
+                        throw new Error('Cannot prove wallet balances without a scan start block');
+                    }
+                    startScanningBlockSlowScan = strictStartBlock;
+                }
+                else {
+                    // Get updated start-scanning block from new valid utxoMerkletree.
+                    startScanningBlockSlowScan = await this.getNextStartingBlockSlowScan(txidVersion, chain);
+                }
+                debugger_1.default.log(`[${txidVersion}] startScanningBlockSlowScan: ${startScanningBlockSlowScan}`);
+                // Strict callers need finalized coverage only; do not make unfinalized tip part of proof.
+                const scanEndBlock = options.minimumBlock ?? providerLatestBlock;
+                switch (txidVersion) {
+                    case poi_types_1.TXIDVersion.V2_PoseidonMerkle:
+                        await this.slowSyncV2(chain, utxoMerkletree, startScanningBlockSlowScan, scanEndBlock, postQuickSyncProgress);
+                        break;
+                    case poi_types_1.TXIDVersion.V3_PoseidonMerkle:
+                        await this.slowSyncV3(chain, utxoMerkletree, startScanningBlockSlowScan, scanEndBlock, postQuickSyncProgress);
+                        break;
+                }
             }
             const { tree: latestTree } = await utxoMerkletree.getLatestTreeAndIndex();
             // check roots for trees up to this tree on 'scan'
@@ -399,6 +475,14 @@ class RailgunEngine extends events_1.default {
                 const overallProgress = progress * (0.97 - decryptStartingProgress) + decryptStartingProgress;
                 this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, overallProgress); // 90-97%
             }, true);
+            if (options.throwOnFailure === true) {
+                if (!(0, is_defined_1.isDefined)(options.minimumBlock)) {
+                    throw new Error('Strict wallet balance scan requires a minimum block');
+                }
+                await this.assertWalletBalancesDecrypted(txidVersion, chain, walletIdFilter ?? []);
+                const validatedCursor = await this.getValidatedWalletScanCursor(txidVersion, chain, options.minimumBlock, providerLatestBlock);
+                options.onValidatedScan?.(validatedCursor);
+            }
             this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, 0.97); // 97%
             // The handler of EngineEvent.UTXOScanDecryptBalancesComplete will
             // call emitScanEventHistoryComplete when it is done processing balances since that can take some time.
@@ -423,6 +507,9 @@ class RailgunEngine extends events_1.default {
                 chain,
             };
             this.emit(event_types_1.EngineEvent.UTXOMerkletreeHistoryScanUpdate, scanIncompleteData);
+            if (options.throwOnFailure === true) {
+                throw err;
+            }
         }
         finally {
             utxoMerkletree.isScanning = false;
@@ -1102,6 +1189,20 @@ class RailgunEngine extends events_1.default {
             .then((val) => parseInt(val, 10))
             .catch(() => Promise.resolve(undefined));
     }
+    /** Confirms the durable slow-scan cursor covers the requested block and current provider view. */
+    async getValidatedWalletScanCursor(txidVersion, chain, minimumBlock, providerBlock) {
+        const cursor = await this.getLastSyncedBlock(txidVersion, chain);
+        if (!(0, is_defined_1.isDefined)(cursor) || !Number.isSafeInteger(cursor)) {
+            throw new Error('Wallet balance scan has no valid durable cursor');
+        }
+        if (cursor < minimumBlock) {
+            throw new Error('Wallet balance scan cursor is below the minimum block');
+        }
+        if (cursor > providerBlock) {
+            throw new Error('Wallet balance scan cursor is ahead of the provider');
+        }
+        return cursor;
+    }
     static getUTXOMerkletreeHistoryVersionDBPrefix(chain) {
         const path = [database_1.DatabaseNamespace.ChainSyncInfo, 'merkleetree_history_version'];
         if (chain != null) {
@@ -1208,6 +1309,30 @@ class RailgunEngine extends events_1.default {
                     progressCallback(finishedWalletsProgress + newWalletProgress);
                 }
             }, deferCompletionEvent);
+        }
+    }
+    /** Makes balance decryption errors visible to callers that need a complete snapshot. */
+    async assertWalletBalancesDecrypted(txidVersion, chain, walletIdFilter) {
+        const requestedWalletIds = new Set(walletIdFilter);
+        const wallets = this.allWallets().filter((wallet) => requestedWalletIds.has(wallet.id));
+        if (wallets.length !== requestedWalletIds.size) {
+            throw new Error('Cannot prove balances for an unloaded wallet');
+        }
+        const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
+        const { tree: latestTree } = await utxoMerkletree.getLatestTreeAndIndex();
+        for (const wallet of wallets) {
+            // Wallet decryption catches internal errors, so verify its saved scan heights here.
+            // eslint-disable-next-line no-await-in-loop
+            const walletDetails = await wallet.getWalletDetails(txidVersion, chain);
+            const firstWalletTree = walletDetails.creationTree ?? 0;
+            for (let tree = firstWalletTree; tree <= latestTree; tree += 1) {
+                // eslint-disable-next-line no-await-in-loop
+                const treeLength = await utxoMerkletree.getTreeLength(tree);
+                const walletScannedHeight = walletDetails.treeScannedHeights[tree] ?? 0;
+                if (walletScannedHeight < treeLength) {
+                    throw new Error(`Wallet balance decryption is incomplete for tree ${tree}`);
+                }
+            }
         }
     }
     invalidateTXOsCacheAllWallets(chain) {

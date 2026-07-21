@@ -53,6 +53,7 @@ import { TXIDVersion } from '../models/poi-types';
 import { AES } from '../utils/encryption/aes';
 import { RailgunVersionedSmartContracts } from '../contracts/railgun-smart-wallet/railgun-versioned-smart-contracts';
 import { RelayAdaptVersionedSmartContracts } from '../contracts/relay-adapt/relay-adapt-versioned-smart-contracts';
+import { ContractStore } from '../contracts/contract-store';
 import { WalletBalanceBucket } from '../models/txo-types';
 import { XChaCha20 } from '../utils/encryption/x-cha-cha-20';
 import { deriveNodes } from '../key-derivation';
@@ -246,6 +247,233 @@ describe('railgun-engine', function test() {
     expect(reloadedWallet.id).to.equal(delegatedWallet.id);
     expect(reloadedWallet.getAddress()).to.equal(delegatedWallet.getAddress());
     expect(engine.wallets[delegatedWallet.id]).to.equal(reloadedWallet);
+  });
+
+  it('Should accept a validated wallet scan cursor ahead of its minimum block', async () => {
+    const sandbox = sinon.createSandbox();
+    const testChain: Chain = { type: ChainType.EVM, id: 1 };
+    try {
+      const scanStub = sandbox
+        .stub(engine as any, 'scanUTXOHistory')
+        .callsFake(async (...args: unknown[]) => {
+          const options = args[3] as {
+            minimumBlock: number;
+            throwOnFailure: boolean;
+            onValidatedScan: (blockNumber: number) => void;
+          };
+          expect(options.minimumBlock).to.equal(100);
+          expect(options.throwOnFailure).to.equal(true);
+          options.onValidatedScan(120);
+        });
+
+      const result = await engine.scanWalletBalancesThroughBlock(
+        TXIDVersion.V2_PoseidonMerkle,
+        testChain,
+        ['wallet-1'],
+        100,
+      );
+
+      expect(result).to.deep.equal({ scannedThroughBlock: 120 });
+      expect(scanStub.calledOnce).to.equal(true);
+    } finally {
+      sandbox.restore();
+    }
+  });
+
+  it('Should reject a wallet scan cursor below its minimum block', async () => {
+    const sandbox = sinon.createSandbox();
+    const testChain: Chain = { type: ChainType.EVM, id: 1 };
+    try {
+      sandbox
+        .stub(engine as any, 'scanUTXOHistory')
+        .callsFake(async (...args: unknown[]) => {
+          const options = args[3] as { onValidatedScan: (blockNumber: number) => void };
+          options.onValidatedScan(99);
+        });
+
+      await expect(
+        engine.scanWalletBalancesThroughBlock(
+          TXIDVersion.V2_PoseidonMerkle,
+          testChain,
+          ['wallet-1'],
+          100,
+        ),
+      ).to.be.rejectedWith('Wallet balance scan did not reach its minimum block');
+    } finally {
+      sandbox.restore();
+    }
+  });
+
+  it('Should reject strict scans for non-V2 trees', async () => {
+    const testChain: Chain = { type: ChainType.EVM, id: 1 };
+
+    await expect(
+      engine.scanWalletBalancesThroughBlock(
+        TXIDVersion.V3_PoseidonMerkle,
+        testChain,
+        ['wallet-1'],
+        100,
+      ),
+    ).to.be.rejectedWith('Wallet balance scan proof only supports V2 trees');
+  });
+
+  it('Should not use the provider tip as a durable wallet scan cursor', async () => {
+    const sandbox = sinon.createSandbox();
+    const testChain: Chain = { type: ChainType.EVM, id: 1 };
+    try {
+      sandbox.stub(engine as any, 'getLastSyncedBlock').resolves(99);
+
+      await expect(
+        (engine as any).getValidatedWalletScanCursor(
+          TXIDVersion.V2_PoseidonMerkle,
+          testChain,
+          100,
+          120,
+        ),
+      ).to.be.rejectedWith('Wallet balance scan cursor is below the minimum block');
+    } finally {
+      sandbox.restore();
+    }
+  });
+
+  it('Should accept a durable cursor at the exact minimum and provider block', async () => {
+    const sandbox = sinon.createSandbox();
+    const testChain: Chain = { type: ChainType.EVM, id: 1 };
+    try {
+      sandbox.stub(engine as any, 'getLastSyncedBlock').resolves(100);
+
+      const result = await (engine as any).getValidatedWalletScanCursor(
+        TXIDVersion.V2_PoseidonMerkle,
+        testChain,
+        100,
+        100,
+      );
+
+      expect(result).to.equal(100);
+    } finally {
+      sandbox.restore();
+    }
+  });
+
+  it('Should skip covered strict history and cap uncovered scans at the minimum block', async () => {
+    const sandbox = sinon.createSandbox();
+    const testChain: Chain = { type: ChainType.EVM, id: 1 };
+    const fakeMerkletree = {
+      isScanning: false,
+      getLatestTreeAndIndex: sandbox.stub().resolves({ tree: -1, index: -1 }),
+    };
+    try {
+      sandbox.stub(engine as any, 'hasUTXOMerkletree').returns(true);
+      sandbox
+        .stub(engine as any, 'getUTXOMerkletreeHistoryVersion')
+        .resolves(Number.MAX_SAFE_INTEGER);
+      sandbox.stub(engine as any, 'getUTXOMerkletree').returns(fakeMerkletree);
+      const cursorStub = sandbox.stub(engine as any, 'getLastSyncedBlock');
+      cursorStub.onFirstCall().resolves(100);
+      cursorStub.onSecondCall().resolves(99);
+      const quickSyncStub = sandbox.stub(engine as any, 'performQuickSync').resolves();
+      const slowSyncStub = sandbox.stub(engine as any, 'slowSyncV2').resolves();
+      sandbox.stub(engine as any, 'decryptBalancesAllWallets').resolves();
+      sandbox.stub(engine as any, 'assertWalletBalancesDecrypted').resolves();
+      sandbox.stub(engine as any, 'getValidatedWalletScanCursor').resolves(100);
+      sandbox.stub(ContractStore.railgunSmartWalletContracts, 'get').returns({
+        contract: {
+          runner: {
+            provider: { getBlockNumber: sandbox.stub().resolves(120) },
+          },
+        },
+      } as any);
+
+      // Existing durable coverage must not run QuickSync or scan backwards.
+      await (engine as any).scanUTXOHistory(
+        TXIDVersion.V2_PoseidonMerkle,
+        testChain,
+        ['wallet-1'],
+        { minimumBlock: 100, throwOnFailure: true },
+      );
+      expect(quickSyncStub.notCalled).to.equal(true);
+      expect(slowSyncStub.notCalled).to.equal(true);
+
+      await (engine as any).scanUTXOHistory(
+        TXIDVersion.V2_PoseidonMerkle,
+        testChain,
+        ['wallet-1'],
+        { minimumBlock: 100, throwOnFailure: true },
+      );
+      expect(quickSyncStub.calledOnce).to.equal(true);
+      expect(slowSyncStub.calledOnce).to.equal(true);
+      expect(slowSyncStub.firstCall.args[2]).to.equal(99);
+      expect(slowSyncStub.firstCall.args[3]).to.equal(100);
+    } finally {
+      sandbox.restore();
+    }
+  });
+
+  it('Should throw when strict quick sync fails after retry', async () => {
+    const sandbox = sinon.createSandbox();
+    const testChain: Chain = { type: ChainType.EVM, id: 1 };
+    let quickSyncCalls = 0;
+    const failingEngine = await RailgunEngine.initForWallet(
+      'Fail Quick Sync',
+      memdown(),
+      testArtifactsGetter,
+      async () => {
+        quickSyncCalls += 1;
+        throw new Error('Quick sync unavailable');
+      },
+      mockQuickSyncRailgunTransactionsV2,
+      mockRailgunTxidMerklerootValidator,
+      mockGetLatestValidatedRailgunTxid,
+      undefined,
+      undefined,
+    );
+    try {
+      sandbox.stub(failingEngine as any, 'getUTXOMerkletree').returns({});
+      sandbox.stub(failingEngine as any, 'getStartScanningBlock').resolves(1);
+
+      await expect(
+        (failingEngine as any).performQuickSync(
+          TXIDVersion.V2_PoseidonMerkle,
+          testChain,
+          0.5,
+          0,
+          true,
+        ),
+      ).to.be.rejectedWith('Failed to quick sync');
+      expect(quickSyncCalls).to.equal(2);
+    } finally {
+      sandbox.restore();
+    }
+  });
+
+  it('Should reject incomplete wallet balance decryption', async () => {
+    const sandbox = sinon.createSandbox();
+    const testChain: Chain = { type: ChainType.EVM, id: 1 };
+    try {
+      sandbox.stub(engine as any, 'allWallets').returns([
+        {
+          id: 'wallet-1',
+          getWalletDetails: sandbox.stub().resolves({
+            treeScannedHeights: [4],
+            creationTree: undefined,
+          }),
+        },
+      ]);
+      sandbox.stub(engine as any, 'getUTXOMerkletree').returns({
+        getLatestTreeAndIndex: sandbox.stub().resolves({ tree: 0, index: 4 }),
+        getTreeLength: sandbox.stub().resolves(5),
+      });
+
+      await expect(
+        (engine as any).assertWalletBalancesDecrypted(
+          TXIDVersion.V2_PoseidonMerkle,
+          testChain,
+          ['wallet-1'],
+        ),
+      ).to.be.rejectedWith('Wallet balance decryption is incomplete for tree 0');
+    } finally {
+      sandbox.restore();
+    }
   });
 
   it('Should assign distinct delegated-sign wallet IDs for distinct viewing keys', async () => {
