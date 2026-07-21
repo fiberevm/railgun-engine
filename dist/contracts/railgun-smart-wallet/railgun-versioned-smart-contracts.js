@@ -54,15 +54,15 @@ class RailgunVersionedSmartContracts {
         }
         throw new Error('Unsupported txidVersion');
     }
-    static getHistoricalEvents(txidVersion, chain, initialStartBlock, latestBlock, getNextStartBlockFromValidMerkletree, eventsCommitmentListener, eventsNullifierListener, eventsUnshieldListener, eventsRailgunTransactionsV3Listener, setLastSyncedBlock) {
+    static getHistoricalEvents(txidVersion, chain, initialStartBlock, latestBlock, getNextStartBlockFromValidMerkletree, eventsCommitmentListener, eventsNullifierListener, eventsUnshieldListener, eventsRailgunTransactionsV3Listener, setLastSyncedBlock, options = {}) {
         switch (txidVersion) {
             case poi_types_1.TXIDVersion.V2_PoseidonMerkle: {
                 const contractV2 = contract_store_1.ContractStore.railgunSmartWalletContracts.getOrThrow(null, chain);
-                return contractV2.getHistoricalEvents(initialStartBlock, latestBlock, getNextStartBlockFromValidMerkletree, eventsCommitmentListener, eventsNullifierListener, eventsUnshieldListener, setLastSyncedBlock);
+                return contractV2.getHistoricalEvents(initialStartBlock, latestBlock, getNextStartBlockFromValidMerkletree, eventsCommitmentListener, eventsNullifierListener, eventsUnshieldListener, setLastSyncedBlock, options);
             }
             case poi_types_1.TXIDVersion.V3_PoseidonMerkle: {
                 const contractV3 = contract_store_1.ContractStore.poseidonMerkleAccumulatorV3Contracts.getOrThrow(null, chain);
-                return contractV3.getHistoricalEvents(initialStartBlock, latestBlock, getNextStartBlockFromValidMerkletree, eventsCommitmentListener, eventsNullifierListener, eventsUnshieldListener, eventsRailgunTransactionsV3Listener, setLastSyncedBlock);
+                return contractV3.getHistoricalEvents(initialStartBlock, latestBlock, getNextStartBlockFromValidMerkletree, eventsCommitmentListener, eventsNullifierListener, eventsUnshieldListener, eventsRailgunTransactionsV3Listener, setLastSyncedBlock, options);
             }
         }
         throw new Error('Unsupported txidVersion');

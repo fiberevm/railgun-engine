@@ -17,4 +17,5 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // Note: we purposefully do not export everything, in order to reduce the number of public APIs
 __exportStar(require("./transaction-batch"), exports);
 __exportStar(require("./railgun-txid"), exports);
+__exportStar(require("./prepared-transaction"), exports);
 //# sourceMappingURL=index.js.map

@@ -46,6 +46,14 @@ class RelayAdaptVersionedSmartContracts {
         }
         throw new Error('Unsupported txidVersion');
     }
+    static populateRelayWithActionData(txidVersion, chain, transactions, actionData) {
+        if (txidVersion !== poi_types_1.TXIDVersion.V2_PoseidonMerkle) {
+            throw new Error('Prepared RelayAdapt transactions currently support only V2.');
+        }
+        return contract_store_1.ContractStore.relayAdaptV2Contracts
+            .getOrThrow(null, chain)
+            .populateRelayWithActionData(transactions, actionData);
+    }
     static getRelayAdaptParamsUnshieldBaseToken(txidVersion, chain, dummyUnshieldTransactions, unshieldAddress, random31Bytes, sendWithPublicWallet) {
         switch (txidVersion) {
             case poi_types_1.TXIDVersion.V2_PoseidonMerkle: {

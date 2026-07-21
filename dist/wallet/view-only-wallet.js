@@ -6,10 +6,12 @@ const hash_1 = require("../utils/hash");
 const keys_utils_1 = require("../utils/keys-utils");
 const abstract_wallet_1 = require("./abstract-wallet");
 class ViewOnlyWallet extends abstract_wallet_1.AbstractWallet {
-    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/no-unused-vars
-    sign(_publicInputs, _encryptionKey) {
+    /* eslint-disable @typescript-eslint/no-unused-vars */
+    // eslint-disable-next-line class-methods-use-this
+    sign(_publicInputs, _encryptionKey, _signingData) {
         throw new Error('View-Only wallet cannot generate signatures.');
     }
+    /* eslint-enable @typescript-eslint/no-unused-vars */
     /**
      * Calculate Wallet ID from mnemonic and derivation path index
      * @returns {string} hash of mnemonic and index

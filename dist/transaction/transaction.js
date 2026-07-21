@@ -82,7 +82,7 @@ class Transaction {
     async generateTransactionRequest(wallet, txidVersion, encryptionKey, globalBoundParams) {
         const merkletree = wallet.getUTXOMerkletree(txidVersion, this.chain);
         const merkleRoot = await merkletree.getRoot(this.spendingTree);
-        const spendingPublicKey = wallet.spendingPublicKey;
+        const { spendingPublicKey } = wallet;
         const nullifyingKey = wallet.getNullifyingKey();
         const senderViewingKeys = wallet.getViewingKeyPair();
         // Get values
@@ -220,6 +220,37 @@ class Transaction {
         throw new Error('Invalid txidVersion.');
     }
     /**
+     * Builds unsigned proof inputs and captures the matching public transaction semantics once.
+     * Callers may authorize this object now and prove this same object later.
+     */
+    async generatePreparedTransaction(wallet, txidVersion, encryptionKey, globalBoundParams) {
+        const transactionRequest = await this.generateTransactionRequest(wallet, txidVersion, encryptionKey, globalBoundParams);
+        return {
+            ...transactionRequest,
+            unshieldPreimage: Transaction.formatUnshieldPreimage(this.unshieldNote.preImage),
+        };
+    }
+    static getSigningData(preparedTransaction) {
+        const { publicInputs, boundParams, unshieldPreimage } = preparedTransaction;
+        switch (preparedTransaction.txidVersion) {
+            case poi_types_1.TXIDVersion.V2_PoseidonMerkle:
+                return {
+                    txidVersion: preparedTransaction.txidVersion,
+                    publicInputs,
+                    boundParams: boundParams,
+                    unshieldPreimage,
+                };
+            case poi_types_1.TXIDVersion.V3_PoseidonMerkle:
+                return {
+                    txidVersion: preparedTransaction.txidVersion,
+                    publicInputs,
+                    boundParams: boundParams,
+                    unshieldPreimage,
+                };
+        }
+        throw new Error('Invalid txidVersion.');
+    }
+    /**
      * Generate proof and return serialized transaction
      * @param prover - prover to use
      * @param wallet - wallet to spend from
@@ -227,15 +258,26 @@ class Transaction {
      * @returns serialized transaction
      */
     async generateProvedTransaction(txidVersion, prover, unprovedTransactionInputs, progressCallback) {
+        return Transaction.proveTransaction(prover, unprovedTransactionInputs, this.unshieldNote.preImage, progressCallback);
+    }
+    /** Proves an earlier prepared request without rebuilding any signed transaction fields. */
+    static async generateProvedTransactionFromPrepared(prover, preparedTransaction, signature, progressCallback) {
+        const unprovedTransactionInputs = {
+            ...preparedTransaction,
+            signature: [...signature.R8, signature.S],
+        };
+        return Transaction.proveTransaction(prover, unprovedTransactionInputs, preparedTransaction.unshieldPreimage, progressCallback);
+    }
+    static async proveTransaction(prover, unprovedTransactionInputs, unshieldPreimage, progressCallback) {
         const { publicInputs, privateInputs, boundParams } = unprovedTransactionInputs;
         Transaction.assertCanProve(privateInputs);
-        const { proof } = await prover.proveRailgun(txidVersion, unprovedTransactionInputs, progressCallback);
+        const { proof } = await prover.proveRailgun(unprovedTransactionInputs.txidVersion, unprovedTransactionInputs, progressCallback);
         switch (unprovedTransactionInputs.txidVersion) {
             case poi_types_1.TXIDVersion.V2_PoseidonMerkle: {
-                return Transaction.createTransactionStructV2(unprovedTransactionInputs.txidVersion, proof, publicInputs, boundParams, this.unshieldNote.preImage);
+                return Transaction.createTransactionStructV2(unprovedTransactionInputs.txidVersion, proof, publicInputs, boundParams, unshieldPreimage);
             }
             case poi_types_1.TXIDVersion.V3_PoseidonMerkle: {
-                return Transaction.createTransactionStructV3(unprovedTransactionInputs.txidVersion, proof, publicInputs, boundParams, this.unshieldNote.preImage);
+                return Transaction.createTransactionStructV3(unprovedTransactionInputs.txidVersion, proof, publicInputs, boundParams, unshieldPreimage);
             }
         }
         throw new Error('Invalid txidVersion.');
@@ -275,11 +317,7 @@ class Transaction {
             nullifiers: publicInputs.nullifiers.map((n) => bytes_1.ByteUtils.nToHex(n, bytes_1.ByteLength.UINT_256, true)),
             boundParams,
             commitments: publicInputs.commitmentsOut.map((n) => bytes_1.ByteUtils.nToHex(n, bytes_1.ByteLength.UINT_256, true)),
-            unshieldPreimage: {
-                npk: bytes_1.ByteUtils.formatToByteLength(unshieldPreimage.npk, bytes_1.ByteLength.UINT_256, true),
-                token: unshieldPreimage.token,
-                value: unshieldPreimage.value,
-            },
+            unshieldPreimage: Transaction.formatUnshieldPreimage(unshieldPreimage),
         };
     }
     static createTransactionStructV3(txidVersion, proof, publicInputs, boundParams, unshieldPreimage) {
@@ -290,11 +328,14 @@ class Transaction {
             nullifiers: publicInputs.nullifiers.map((n) => bytes_1.ByteUtils.nToHex(n, bytes_1.ByteLength.UINT_256, true)),
             boundParams,
             commitments: publicInputs.commitmentsOut.map((n) => bytes_1.ByteUtils.nToHex(n, bytes_1.ByteLength.UINT_256, true)),
-            unshieldPreimage: {
-                npk: bytes_1.ByteUtils.formatToByteLength(unshieldPreimage.npk, bytes_1.ByteLength.UINT_256, true),
-                token: unshieldPreimage.token,
-                value: unshieldPreimage.value,
-            },
+            unshieldPreimage: Transaction.formatUnshieldPreimage(unshieldPreimage),
+        };
+    }
+    static formatUnshieldPreimage(unshieldPreimage) {
+        return {
+            npk: bytes_1.ByteUtils.formatToByteLength(unshieldPreimage.npk, bytes_1.ByteLength.UINT_256, true),
+            token: unshieldPreimage.token,
+            value: unshieldPreimage.value,
         };
     }
     static getLocalBoundParams(transaction) {

@@ -21,6 +21,26 @@ import { TXIDMerkletree } from './merkletree/txid-merkletree';
 import { MerklerootValidator } from './models/merkletree-types';
 import { TXIDVersion } from './models/poi-types';
 import { Registry } from './utils/registry';
+export type RailgunFinalizedScanCursors = {
+    commitmentsScannedThroughBlock: number;
+    commitmentsScannedThroughBlockHash: string;
+    nullifiersScannedThroughBlock: number;
+    nullifiersScannedThroughBlockHash: string;
+};
+export type RailgunFinalizedScanResult = {
+    txidVersion: TXIDVersion;
+    chain: Chain;
+    targetBlock: number;
+    targetBlockHash: string;
+    scannedThroughBlock: number;
+    cursors: RailgunFinalizedScanCursors;
+};
+export type RailgunFinalizedScanCursorState = {
+    commitmentsScannedThroughBlock: Optional<number>;
+    commitmentsScannedThroughBlockHash: Optional<string>;
+    nullifiersScannedThroughBlock: Optional<number>;
+    nullifiersScannedThroughBlockHash: Optional<string>;
+};
 declare class RailgunEngine extends EventEmitter {
     readonly db: Database;
     private readonly utxoMerkletrees;
@@ -64,6 +84,7 @@ declare class RailgunEngine extends EventEmitter {
      * @param nullifiers - transaction info to nullify commitment
      */
     private nullifierListener;
+    private static formatNullifiers;
     /**
      * Handle new unshield events
      * @param chain - chain type/id
@@ -88,10 +109,14 @@ declare class RailgunEngine extends EventEmitter {
      * @param walletIdFilter - optional list of wallet ids to decrypt balances
      */
     scanContractHistory(chain: Chain, walletIdFilter: Optional<string[]>): Promise<void>;
+    /** Scans through a caller-finalized target and verifies its canonical hash before export. */
+    scanWalletBalancesThroughBlock(txidVersion: TXIDVersion, chain: Chain, walletIdFilter: string[], targetBlock: number, targetBlockHash: string): Promise<RailgunFinalizedScanResult>;
     /**
      * Scan (via quick sync or slow sync) on-chain data for the UTXO merkletree.
      */
     private scanUTXOHistory;
+    private getValidatedFinalizedScanCursors;
+    private assertWalletBalancesDecrypted;
     emitScanEventHistoryComplete(txidVersion: TXIDVersion, chain: Chain): void;
     private slowSyncV2;
     private slowSyncV3;
@@ -145,6 +170,18 @@ declare class RailgunEngine extends EventEmitter {
      */
     private unloadNetwork;
     private static getLastSyncedBlockDBPrefix;
+    private static getFinalizedScanCursorDBPrefix;
+    private static normalizeBlockHash;
+    private static getCanonicalBlockHash;
+    private static assertCanonicalBlockHash;
+    private static getBlockHashUnderFinalizedTarget;
+    private getFinalizedScanCursor;
+    private setFinalizedScanCursor;
+    /** Returns independent commitment and nullifier coverage for one version and chain. */
+    getFinalizedScanCursors(txidVersion: TXIDVersion, chain: Chain): Promise<RailgunFinalizedScanCursorState>;
+    private clearFinalizedScanCursors;
+    private clearFinalizedScanStateForCanonicalReplay;
+    private getFinalizedScanStartBlock;
     /**
      * Sets last synced block to resume syncing on next load.
      * @param chain - chain type/id to store value for

@@ -10,7 +10,7 @@ import { BytesData, Commitment } from '../models/formatted-types';
 import { TXO, WalletBalanceBucket } from '../models/txo-types';
 import { AddressKeys, TokenBalancesAllTxidVersions, TotalBalancesByTreeNumber, TokenBalances, TransactionHistoryEntry, TreeBalance, KeysWalletData, ViewOnlyWalletData, WalletData, WalletDetails, WalletDetailsMap } from '../models/wallet-types';
 import { Chain } from '../models/engine-types';
-import { PublicInputsRailgun } from '../models/prover-types';
+import { PublicInputsRailgun, RailgunTransactionSigningData } from '../models/prover-types';
 import { UTXOMerkletree } from '../merkletree/utxo-merkletree';
 import { TXIDMerkletree } from '../merkletree/txid-merkletree';
 import { TXIDVersion } from '../models/poi-types';
@@ -225,12 +225,14 @@ declare abstract class AbstractWallet extends EventEmitter {
      * @param chain - chain type/id to clear
      */
     clearDecryptedBalancesAllTXIDVersions(chain: Chain): Promise<void>;
+    /** Clears balances for one TXID version without removing sibling-version data. */
+    clearDecryptedBalances(txidVersion: TXIDVersion, chain: Chain): Promise<void>;
     /**
      * Clears stored balances and re-decrypts fully.
      * @param chain - chain type/id to rescan
      */
     fullRedecryptBalancesAllTXIDVersions(chain: Chain, progressCallback: Optional<(progress: number) => void>): Promise<void>;
-    abstract sign(publicInputs: PublicInputsRailgun, encryptionKey: string): Promise<Signature>;
+    abstract sign(publicInputs: PublicInputsRailgun, encryptionKey: string, signingData?: RailgunTransactionSigningData): Promise<Signature>;
     static dbPath(id: string): BytesData[];
     static read(db: Database, id: string, encryptionKey: string): Promise<WalletData | ViewOnlyWalletData | KeysWalletData>;
     static write(db: Database, id: string, encryptionKey: string, data: WalletData | ViewOnlyWalletData | KeysWalletData): Promise<void>;

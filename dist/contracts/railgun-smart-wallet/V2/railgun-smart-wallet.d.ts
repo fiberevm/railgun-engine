@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { ContractTransaction, FallbackProvider } from 'ethers';
 import EventEmitter from 'events';
-import { EventsCommitmentListener, EventsNullifierListener, EventsUnshieldListener } from '../../../models/event-types';
+import { EventsCommitmentListener, EventsNullifierListener, EventsUnshieldListener, HistoricalEventsScanOptions } from '../../../models/event-types';
 import { CommitmentPreimageStruct, ShieldRequestStruct, TokenDataStructOutput, TransactionStruct, RailgunSmartWallet } from '../../../abi/typechain/RailgunSmartWallet';
 import { Chain } from '../../../models/engine-types';
 import { PollingJsonRpcProvider } from '../../../provider/polling-json-rpc-provider';
@@ -65,7 +65,7 @@ export declare class RailgunSmartWalletContract extends EventEmitter {
      * @param startBlock - block to scan from
      * @param latestBlock - block to scan to
      */
-    getHistoricalEvents(initialStartBlock: number, latestBlock: number, getNextStartBlockFromValidMerkletree: () => Promise<number>, eventsCommitmentListener: EventsCommitmentListener, eventsNullifierListener: EventsNullifierListener, eventsUnshieldListener: EventsUnshieldListener, setLastSyncedBlock: (lastSyncedBlock: number) => Promise<void>): Promise<void>;
+    getHistoricalEvents(initialStartBlock: number, latestBlock: number, getNextStartBlockFromValidMerkletree: () => Promise<number>, eventsCommitmentListener: EventsCommitmentListener, eventsNullifierListener: EventsNullifierListener, eventsUnshieldListener: EventsUnshieldListener, setLastSyncedBlock: (lastSyncedBlock: number) => Promise<void>, options?: HistoricalEventsScanOptions): Promise<void>;
     /**
      * GenerateShield populated transaction
      * @returns Populated transaction

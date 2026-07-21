@@ -1,4 +1,5 @@
 import { PoseidonMerkleVerifier } from '../abi/typechain';
+import { CommitmentPreimageStruct } from '../abi/typechain/PoseidonMerkleAccumulator';
 import { BoundParamsStruct } from '../abi/typechain/RailgunSmartWallet';
 import { TXIDVersion } from './poi-types';
 export declare const enum Circuits {
@@ -56,6 +57,22 @@ export type RailgunTransactionRequestV3 = {
     boundParams: PoseidonMerkleVerifier.BoundParamsStruct;
 };
 export type RailgunTransactionRequest = RailgunTransactionRequestV2 | RailgunTransactionRequestV3;
+export type PreparedRailgunTransactionV2 = RailgunTransactionRequestV2 & {
+    unshieldPreimage: CommitmentPreimageStruct;
+};
+export type PreparedRailgunTransactionV3 = RailgunTransactionRequestV3 & {
+    unshieldPreimage: CommitmentPreimageStruct;
+};
+/**
+ * Complete unsigned transaction witness. Keep this data private: it contains note inputs and the
+ * nullifying key. Preparing once lets an external signer authorize exact public semantics before
+ * this same witness is proved later.
+ */
+export type PreparedRailgunTransaction = PreparedRailgunTransactionV2 | PreparedRailgunTransactionV3;
+export type RailgunTransactionSigningDataV2 = Omit<PreparedRailgunTransactionV2, 'privateInputs'>;
+export type RailgunTransactionSigningDataV3 = Omit<PreparedRailgunTransactionV3, 'privateInputs'>;
+/** Exact public semantics supplied to delegated signers before a proof is generated. */
+export type RailgunTransactionSigningData = RailgunTransactionSigningDataV2 | RailgunTransactionSigningDataV3;
 export type UnprovedTransactionInputs = RailgunTransactionRequest & {
     signature: [bigint, bigint, bigint];
 };

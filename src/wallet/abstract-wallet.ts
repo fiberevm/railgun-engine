@@ -1,6 +1,6 @@
 /* eslint-disable no-await-in-loop */
 import { Signature } from '@railgun-community/circomlibjs';
-import type { PutBatch } from 'abstract-leveldown';
+import type { AbstractBatch, PutBatch } from 'abstract-leveldown';
 import EventEmitter from 'events';
 import msgpack from 'msgpack-lite';
 import { ContractTransaction } from 'ethers';
@@ -9,11 +9,7 @@ import { Database } from '../database/database';
 import EngineDebug from '../debugger/debugger';
 import { encodeAddress } from '../key-derivation/bech32';
 import { SpendingPublicKey, ViewingKeyPair, WalletNode } from '../key-derivation/wallet-node';
-import {
-  EngineEvent,
-  UnshieldStoredEvent,
-  WalletScannedEventData,
-} from '../models/event-types';
+import { EngineEvent, UnshieldStoredEvent, WalletScannedEventData } from '../models/event-types';
 import {
   BytesData,
   Ciphertext,
@@ -31,11 +27,7 @@ import {
   TransactCommitmentV2,
   TransactCommitmentV3,
 } from '../models/formatted-types';
-import {
-  SentCommitment,
-  TXO,
-  WalletBalanceBucket,
-} from '../models/txo-types';
+import { SentCommitment, TXO, WalletBalanceBucket } from '../models/txo-types';
 import { LEGACY_MEMO_METADATA_BYTE_CHUNKS } from '../note/memo';
 import { ByteLength, ByteUtils, fromUTF8String } from '../utils/bytes';
 import { generateNaiveRandomHex, getSharedSymmetricKey, signED25519 } from '../utils/keys-utils';
@@ -74,7 +66,7 @@ import {
 } from '../note/note-util';
 import { TokenDataGetter } from '../token/token-data-getter';
 import { isDefined, removeDuplicates, removeUndefineds } from '../utils/is-defined';
-import { PublicInputsRailgun } from '../models/prover-types';
+import { PublicInputsRailgun, RailgunTransactionSigningData } from '../models/prover-types';
 import { UTXOMerkletree } from '../merkletree/utxo-merkletree';
 import {
   isShieldCommitmentType,
@@ -83,13 +75,8 @@ import {
 } from '../utils/commitment';
 import { BlindedCommitment } from '../utils/blinded-commitment';
 import { TXIDMerkletree } from '../merkletree/txid-merkletree';
-import {
-  ACTIVE_TXID_VERSIONS,
-  TXIDVersion,
-} from '../models/poi-types';
-import {
-  getGlobalTreePosition,
-} from '../utils/global-tree-position';
+import { ACTIVE_TXID_VERSIONS, TXIDVersion } from '../models/poi-types';
+import { getGlobalTreePosition } from '../utils/global-tree-position';
 import { Prover } from '../prover/prover';
 import { extractFirstNoteERC20AmountMapFromTransactionRequest } from '../validation/extract-transaction-data';
 import { Registry } from '../utils/registry';
@@ -942,13 +929,15 @@ abstract class AbstractWallet extends EventEmitter {
           this.tokenDataGetter,
         );
 
-        // Check if TXO has been spent.
-        if (receiveCommitment.spendtxid === false) {
-          const nullifierTxid = await merkletree.getNullifierTxid(receiveCommitment.nullifier, tree);
-          if (isDefined(nullifierTxid)) {
-            receiveCommitment.spendtxid = nullifierTxid;
-            await this.updateReceiveCommitmentInDB(chain, tree, position, receiveCommitment);
-          }
+        // Reconcile persisted spend state so a canonical replay can remove orphaned nullifiers.
+        const nullifierSpendMetadata = await merkletree.getNullifierSpendMetadata(
+          receiveCommitment.nullifier,
+          tree,
+        );
+        const canonicalSpendtxid = nullifierSpendMetadata?.txid ?? false;
+        if (receiveCommitment.spendtxid !== canonicalSpendtxid) {
+          receiveCommitment.spendtxid = canonicalSpendtxid;
+          await this.updateReceiveCommitmentInDB(chain, tree, position, receiveCommitment);
         }
 
         // Look up blinded commitment.
@@ -1005,6 +994,11 @@ abstract class AbstractWallet extends EventEmitter {
           txid: receiveCommitment.txid,
           timestamp: receiveCommitment.timestamp,
           spendtxid: receiveCommitment.spendtxid,
+          spendBlockNumber:
+            receiveCommitment.spendtxid !== false &&
+            nullifierSpendMetadata?.txid === receiveCommitment.spendtxid
+              ? nullifierSpendMetadata.blockNumber
+              : undefined,
           nullifier: receiveCommitment.nullifier,
           note,
           blindedCommitment: receiveCommitment.blindedCommitment,
@@ -1701,9 +1695,7 @@ abstract class AbstractWallet extends EventEmitter {
         if (EngineDebug.isTestRun() && balanceBucket === WalletBalanceBucket.Spendable) {
           // WARNING FOR TESTS ONLY
           EngineDebug.error(
-            new Error(
-              'WARNING: Missing SPENDABLE balance - unexpected balance bucket mismatch',
-            ),
+            new Error('WARNING: Missing SPENDABLE balance - unexpected balance bucket mismatch'),
           );
         }
         continue;
@@ -2058,6 +2050,41 @@ abstract class AbstractWallet extends EventEmitter {
     this.invalidateCommitmentsCache(chain);
   }
 
+  /** Clears balances for one TXID version without removing sibling-version data. */
+  async clearDecryptedBalances(txidVersion: TXIDVersion, chain: Chain) {
+    this.isClearingBalances.set(null, chain, true);
+    try {
+      const [walletDetailsMap, receivedCommitments, sentCommitments] = await Promise.all([
+        this.getWalletDetailsMap(chain),
+        this.queryAllStoredReceiveCommitments(txidVersion, chain),
+        this.queryAllStoredSendCommitments(txidVersion, chain),
+      ]);
+      const deleteBatch: AbstractBatch[] = [
+        ...receivedCommitments.map(({ tree, position }) => ({
+          type: 'del' as const,
+          key: this.getWalletReceiveCommitmentDBPrefix(chain, tree, position).join(':'),
+        })),
+        ...sentCommitments.map(({ tree, position }) => ({
+          type: 'del' as const,
+          key: this.getWalletSentCommitmentDBPrefix(chain, tree, position).join(':'),
+        })),
+      ];
+      await this.db.batch(deleteBatch);
+
+      const walletDetails = walletDetailsMap[txidVersion];
+      if (isDefined(walletDetails)) {
+        walletDetails.treeScannedHeights = [];
+        walletDetails.creationTree = undefined;
+        walletDetails.creationTreeHeight = undefined;
+        await this.db.put(this.getWalletDetailsPath(chain), msgpack.encode(walletDetailsMap));
+      }
+      this.receiveCommitmentsCache.del(txidVersion, chain);
+      this.sentCommitmentsCache.del(txidVersion, chain);
+    } finally {
+      this.isClearingBalances.set(null, chain, false);
+    }
+  }
+
   /**
    * Clears stored balances and re-decrypts fully.
    * @param chain - chain type/id to rescan
@@ -2082,7 +2109,11 @@ abstract class AbstractWallet extends EventEmitter {
     }
   }
 
-  abstract sign(publicInputs: PublicInputsRailgun, encryptionKey: string): Promise<Signature>;
+  abstract sign(
+    publicInputs: PublicInputsRailgun,
+    encryptionKey: string,
+    signingData?: RailgunTransactionSigningData,
+  ): Promise<Signature>;
 
   static dbPath(id: string): BytesData[] {
     return [fromUTF8String('wallet'), id];

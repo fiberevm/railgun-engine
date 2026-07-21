@@ -1,5 +1,6 @@
 import { ContractTransaction, Provider, TransactionRequest, Log } from 'ethers';
 import { TransactionReceiptLog } from '../../../models/formatted-types';
+import { type RelayAdaptActionData } from '../relay-adapt-helper';
 import { ShieldRequestStruct } from '../../../abi/typechain/RailgunSmartWallet';
 import { TransactionStructV2 } from '../../../models/transaction-types';
 export declare const RETURN_DATA_RELAY_ADAPT_STRING_PREFIX = "0x5c0dee5d";
@@ -30,6 +31,7 @@ export declare class RelayAdaptV2Contract {
     private static shouldRequireSuccessForCrossContractCalls;
     getRelayAdaptParamsCrossContractCalls(dummyUnshieldTransactions: TransactionStructV2[], crossContractCalls: ContractTransaction[], relayShieldRequests: ShieldRequestStruct[], random: string, isBroadcasterTransaction: boolean, minGasLimit?: bigint): Promise<string>;
     populateCrossContractCalls(unshieldTransactions: TransactionStructV2[], crossContractCalls: ContractTransaction[], relayShieldRequests: ShieldRequestStruct[], random31Bytes: string, isGasEstimate: boolean, isBroadcasterTransaction: boolean, minGasLimit?: bigint): Promise<ContractTransaction>;
+    populateRelayWithActionData(transactions: TransactionStructV2[], actionData: RelayAdaptActionData): Promise<ContractTransaction>;
     static getMinimumGasLimitForContract(minimumGasLimit: bigint): bigint;
     static estimateGasWithErrorHandler(provider: Provider, transaction: ContractTransaction | TransactionRequest): Promise<bigint>;
     static extractGasEstimateCallFailedIndexAndErrorText(errorMessage: string): {

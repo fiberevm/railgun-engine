@@ -1,8 +1,19 @@
-import { ContractTransaction } from 'ethers';
+import { ContractTransaction, BytesLike } from 'ethers';
 import { RelayAdaptShieldERC20Recipient, RelayAdaptShieldNFTRecipient } from '../../models/formatted-types';
 import { RelayAdapt, ShieldRequestStruct } from '../../abi/typechain/RelayAdapt';
 import { TransactionStructV2, TransactionStructV3 } from '../../models/transaction-types';
+export type RelayAdaptActionData = {
+    random: string;
+    requireSuccess: boolean;
+    minGasLimit: bigint;
+    calls: Array<{
+        to: string;
+        data: string;
+        value: bigint;
+    }>;
+};
 declare class RelayAdaptHelper {
+    static getRelayAdaptParamsFromNullifiers(nullifiers: BytesLike[][], random: string, requireSuccess: boolean, calls: ContractTransaction[], minGasLimit?: bigint): string;
     static generateRelayShieldRequests(random: string, shieldERC20Recipients: RelayAdaptShieldERC20Recipient[], shieldNFTRecipients: RelayAdaptShieldNFTRecipient[]): Promise<ShieldRequestStruct[]>;
     private static createRelayShieldRequestsERC20s;
     private static createRelayShieldRequestsNFTs;

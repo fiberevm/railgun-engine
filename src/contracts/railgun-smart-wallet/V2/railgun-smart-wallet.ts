@@ -13,6 +13,7 @@ import {
   EventsNullifierListener,
   EventsUnshieldListener,
   EngineEvent,
+  HistoricalEventsScanOptions,
 } from '../../../models/event-types';
 import { ByteLength, ByteUtils } from '../../../utils/bytes';
 import { promiseTimeout } from '../../../utils/promises';
@@ -423,6 +424,7 @@ export class RailgunSmartWalletContract extends EventEmitter {
     eventsNullifierListener: EventsNullifierListener,
     eventsUnshieldListener: EventsUnshieldListener,
     setLastSyncedBlock: (lastSyncedBlock: number) => Promise<void>,
+    options: HistoricalEventsScanOptions = {},
   ) {
     const engineV3StartBlockNumber = RailgunSmartWalletContract.getEngineV2StartBlockNumber(
       this.chain,
@@ -467,7 +469,11 @@ export class RailgunSmartWalletContract extends EventEmitter {
 
     let startBlockForNext10000 = initialStartBlock;
 
-    while (currentStartBlock < latestBlock) {
+    while (
+      options.strictSequential === true
+        ? currentStartBlock <= latestBlock
+        : currentStartBlock < latestBlock
+    ) {
       // Process chunks of blocks for all events, serially.
 
       const endBlock = Math.min(latestBlock, currentStartBlock + SCAN_CHUNKS);
@@ -578,6 +584,11 @@ export class RailgunSmartWalletContract extends EventEmitter {
       await setLastSyncedBlock(endBlock);
 
       const nextStartBlockFromCurrentBlock = currentStartBlock + SCAN_CHUNKS + 1;
+      if (options.strictSequential === true) {
+        // Finalized scans must cover every block. Commitment state cannot prove nullifier coverage.
+        currentStartBlock = nextStartBlockFromCurrentBlock;
+        continue;
+      }
       const nextStartBlockFromLatestValidMerkletreeEntry =
         // eslint-disable-next-line no-await-in-loop
         await getNextStartBlockFromValidMerkletree();

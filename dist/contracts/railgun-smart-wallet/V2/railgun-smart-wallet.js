@@ -263,7 +263,7 @@ class RailgunSmartWalletContract extends events_1.default {
      * @param startBlock - block to scan from
      * @param latestBlock - block to scan to
      */
-    async getHistoricalEvents(initialStartBlock, latestBlock, getNextStartBlockFromValidMerkletree, eventsCommitmentListener, eventsNullifierListener, eventsUnshieldListener, setLastSyncedBlock) {
+    async getHistoricalEvents(initialStartBlock, latestBlock, getNextStartBlockFromValidMerkletree, eventsCommitmentListener, eventsNullifierListener, eventsUnshieldListener, setLastSyncedBlock, options = {}) {
         const engineV3StartBlockNumber = RailgunSmartWalletContract.getEngineV2StartBlockNumber(this.chain);
         const engineV3ShieldEventUpdate030923BlockNumber = RailgunSmartWalletContract.getEngineV2ShieldEventUpdate030923BlockNumber(this.chain);
         // TODO: Possible data integrity issue in using commitment block numbers.
@@ -290,7 +290,9 @@ class RailgunSmartWalletContract extends events_1.default {
         const legacyPreMar23EventFilterShield = RailgunSmartWalletContract.getShieldPreMar23EventFilter();
         debugger_1.default.log(`[Chain ${this.chain.type}:${this.chain.id}]: [${txidVersion}] Scanning historical events from block ${currentStartBlock} to ${latestBlock}`);
         let startBlockForNext10000 = initialStartBlock;
-        while (currentStartBlock < latestBlock) {
+        while (options.strictSequential === true
+            ? currentStartBlock <= latestBlock
+            : currentStartBlock < latestBlock) {
             // Process chunks of blocks for all events, serially.
             const endBlock = Math.min(latestBlock, currentStartBlock + SCAN_CHUNKS);
             const withinLegacyEventRange = currentStartBlock <= engineV3StartBlockNumber;
@@ -342,6 +344,11 @@ class RailgunSmartWalletContract extends events_1.default {
             // eslint-disable-next-line no-await-in-loop
             await setLastSyncedBlock(endBlock);
             const nextStartBlockFromCurrentBlock = currentStartBlock + SCAN_CHUNKS + 1;
+            if (options.strictSequential === true) {
+                // Finalized scans must cover every block. Commitment state cannot prove nullifier coverage.
+                currentStartBlock = nextStartBlockFromCurrentBlock;
+                continue;
+            }
             const nextStartBlockFromLatestValidMerkletreeEntry = 
             // eslint-disable-next-line no-await-in-loop
             await getNextStartBlockFromValidMerkletree();

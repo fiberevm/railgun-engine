@@ -1,1 +1,2 @@
 export declare const MINIMUM_RELAY_ADAPT_CROSS_CONTRACT_CALLS_GAS_LIMIT_V2: bigint;
+export declare const RELAY_ADAPT_ACTION_MIN_GAS_LIMIT_V2: bigint;

@@ -579,13 +579,12 @@ class AbstractWallet extends events_1.default {
                 ...receiveCommitment.decrypted,
                 recipientAddress,
             }, vpk, this.tokenDataGetter);
-            // Check if TXO has been spent.
-            if (receiveCommitment.spendtxid === false) {
-                const nullifierTxid = await merkletree.getNullifierTxid(receiveCommitment.nullifier, tree);
-                if ((0, is_defined_1.isDefined)(nullifierTxid)) {
-                    receiveCommitment.spendtxid = nullifierTxid;
-                    await this.updateReceiveCommitmentInDB(chain, tree, position, receiveCommitment);
-                }
+            // Reconcile persisted spend state so a canonical replay can remove orphaned nullifiers.
+            const nullifierSpendMetadata = await merkletree.getNullifierSpendMetadata(receiveCommitment.nullifier, tree);
+            const canonicalSpendtxid = nullifierSpendMetadata?.txid ?? false;
+            if (receiveCommitment.spendtxid !== canonicalSpendtxid) {
+                receiveCommitment.spendtxid = canonicalSpendtxid;
+                await this.updateReceiveCommitmentInDB(chain, tree, position, receiveCommitment);
             }
             // Look up blinded commitment.
             if (!(0, is_defined_1.isDefined)(receiveCommitment.blindedCommitment) ||
@@ -623,6 +622,10 @@ class AbstractWallet extends events_1.default {
                 txid: receiveCommitment.txid,
                 timestamp: receiveCommitment.timestamp,
                 spendtxid: receiveCommitment.spendtxid,
+                spendBlockNumber: receiveCommitment.spendtxid !== false &&
+                    nullifierSpendMetadata?.txid === receiveCommitment.spendtxid
+                    ? nullifierSpendMetadata.blockNumber
+                    : undefined,
                 nullifier: receiveCommitment.nullifier,
                 note,
                 blindedCommitment: receiveCommitment.blindedCommitment,
@@ -1339,6 +1342,40 @@ class AbstractWallet extends events_1.default {
         }
         await this.db.put(this.getWalletDetailsPath(chain), msgpack_lite_1.default.encode(walletDetailsMap));
         this.invalidateCommitmentsCache(chain);
+    }
+    /** Clears balances for one TXID version without removing sibling-version data. */
+    async clearDecryptedBalances(txidVersion, chain) {
+        this.isClearingBalances.set(null, chain, true);
+        try {
+            const [walletDetailsMap, receivedCommitments, sentCommitments] = await Promise.all([
+                this.getWalletDetailsMap(chain),
+                this.queryAllStoredReceiveCommitments(txidVersion, chain),
+                this.queryAllStoredSendCommitments(txidVersion, chain),
+            ]);
+            const deleteBatch = [
+                ...receivedCommitments.map(({ tree, position }) => ({
+                    type: 'del',
+                    key: this.getWalletReceiveCommitmentDBPrefix(chain, tree, position).join(':'),
+                })),
+                ...sentCommitments.map(({ tree, position }) => ({
+                    type: 'del',
+                    key: this.getWalletSentCommitmentDBPrefix(chain, tree, position).join(':'),
+                })),
+            ];
+            await this.db.batch(deleteBatch);
+            const walletDetails = walletDetailsMap[txidVersion];
+            if ((0, is_defined_1.isDefined)(walletDetails)) {
+                walletDetails.treeScannedHeights = [];
+                walletDetails.creationTree = undefined;
+                walletDetails.creationTreeHeight = undefined;
+                await this.db.put(this.getWalletDetailsPath(chain), msgpack_lite_1.default.encode(walletDetailsMap));
+            }
+            this.receiveCommitmentsCache.del(txidVersion, chain);
+            this.sentCommitmentsCache.del(txidVersion, chain);
+        }
+        finally {
+            this.isClearingBalances.set(null, chain, false);
+        }
     }
     /**
      * Clears stored balances and re-decrypts fully.

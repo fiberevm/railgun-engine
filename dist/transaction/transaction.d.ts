@@ -1,10 +1,12 @@
+/// <reference path="../../src/types/global.d.ts" />
+import { Signature } from '@railgun-community/circomlibjs';
 import { AbstractWallet } from '../wallet/abstract-wallet';
 import { Prover, ProverProgressCallback } from '../prover/prover';
 import { AdaptID, TokenData } from '../models/formatted-types';
 import { TXO, UnshieldData } from '../models/txo-types';
 import { Chain } from '../models/engine-types';
 import { TransactNote } from '../note/transact-note';
-import { UnprovedTransactionInputs, RailgunTransactionRequest } from '../models/prover-types';
+import { PreparedRailgunTransaction, UnprovedTransactionInputs, RailgunTransactionSigningData, RailgunTransactionRequest } from '../models/prover-types';
 import { BoundParamsStruct } from '../abi/typechain/RailgunSmartWallet';
 import { TXIDVersion } from '../models/poi-types';
 import { PoseidonMerkleVerifier } from '../abi/typechain';
@@ -36,6 +38,12 @@ declare class Transaction {
      */
     generateTransactionRequest(wallet: AbstractWallet, txidVersion: TXIDVersion, encryptionKey: string, globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct): Promise<RailgunTransactionRequest>;
     /**
+     * Builds unsigned proof inputs and captures the matching public transaction semantics once.
+     * Callers may authorize this object now and prove this same object later.
+     */
+    generatePreparedTransaction(wallet: AbstractWallet, txidVersion: TXIDVersion, encryptionKey: string, globalBoundParams: PoseidonMerkleVerifier.GlobalBoundParamsStruct): Promise<PreparedRailgunTransaction>;
+    static getSigningData(preparedTransaction: PreparedRailgunTransaction): RailgunTransactionSigningData;
+    /**
      * Generate proof and return serialized transaction
      * @param prover - prover to use
      * @param wallet - wallet to spend from
@@ -43,6 +51,9 @@ declare class Transaction {
      * @returns serialized transaction
      */
     generateProvedTransaction(txidVersion: TXIDVersion, prover: Prover, unprovedTransactionInputs: UnprovedTransactionInputs, progressCallback: ProverProgressCallback): Promise<TransactionStructV2 | TransactionStructV3>;
+    /** Proves an earlier prepared request without rebuilding any signed transaction fields. */
+    static generateProvedTransactionFromPrepared(prover: Prover, preparedTransaction: PreparedRailgunTransaction, signature: Signature, progressCallback: ProverProgressCallback): Promise<TransactionStructV2 | TransactionStructV3>;
+    private static proveTransaction;
     /**
      * Return serialized transaction with zero'd proof for gas estimates.
      * @param wallet - wallet to spend from
@@ -53,6 +64,7 @@ declare class Transaction {
     private static assertCanProve;
     private static createTransactionStructV2;
     private static createTransactionStructV3;
+    private static formatUnshieldPreimage;
     static getLocalBoundParams(transaction: TransactionStructV2 | TransactionStructV3): BoundParamsStruct | PoseidonMerkleVerifier.TransactionBoundParamsStruct;
 }
 export { Transaction };

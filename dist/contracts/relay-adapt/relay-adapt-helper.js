@@ -9,6 +9,15 @@ const formatted_types_1 = require("../../models/formatted-types");
 const shield_note_nft_1 = require("../../note/nft/shield-note-nft");
 const note_util_1 = require("../../note/note-util");
 class RelayAdaptHelper {
+    static getRelayAdaptParamsFromNullifiers(nullifiers, random, requireSuccess, calls, minGasLimit = 0n) {
+        const actionData = RelayAdaptHelper.getActionData(random, requireSuccess, calls, minGasLimit);
+        const preimage = ethers_1.AbiCoder.defaultAbiCoder().encode([
+            'bytes32[][] nullifiers',
+            'uint256 transactionsLength',
+            'tuple(bytes31 random, bool requireSuccess, uint256 minGasLimit, tuple(address to, bytes data, uint256 value)[] calls) actionData',
+        ], [nullifiers, nullifiers.length, actionData]);
+        return (0, ethers_1.keccak256)(bytes_1.ByteUtils.hexToBytes(preimage));
+    }
     static async generateRelayShieldRequests(random, shieldERC20Recipients, shieldNFTRecipients) {
         return Promise.all([
             ...(await RelayAdaptHelper.createRelayShieldRequestsERC20s(random, shieldERC20Recipients)),
@@ -68,13 +77,7 @@ class RelayAdaptHelper {
      */
     static getRelayAdaptParams(transactions, random, requireSuccess, calls, minGasLimit = BigInt(0)) {
         const nullifiers = transactions.map((transaction) => transaction.nullifiers);
-        const actionData = RelayAdaptHelper.getActionData(random, requireSuccess, calls, minGasLimit);
-        const preimage = ethers_1.AbiCoder.defaultAbiCoder().encode([
-            'bytes32[][] nullifiers',
-            'uint256 transactionsLength',
-            'tuple(bytes31 random, bool requireSuccess, uint256 minGasLimit, tuple(address to, bytes data, uint256 value)[] calls) actionData',
-        ], [nullifiers, transactions.length, actionData]);
-        return (0, ethers_1.keccak256)(bytes_1.ByteUtils.hexToBytes(preimage));
+        return RelayAdaptHelper.getRelayAdaptParamsFromNullifiers(nullifiers, random, requireSuccess, calls, minGasLimit);
     }
     /**
      * Strips all unnecessary fields from populated transactions

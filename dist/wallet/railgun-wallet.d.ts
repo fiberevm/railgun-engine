@@ -3,7 +3,7 @@ import { Signature } from '@railgun-community/circomlibjs';
 import { Database } from '../database/database';
 import { SpendingKeyPair, SpendingPublicKey, ViewingKeyPair } from '../key-derivation/wallet-node';
 import { AbstractWallet } from './abstract-wallet';
-import { PublicInputsRailgun } from '../models';
+import { PublicInputsRailgun, RailgunTransactionSigningData } from '../models';
 import { Prover } from '../prover/prover';
 declare class RailgunWallet extends AbstractWallet {
     /**
@@ -12,7 +12,7 @@ declare class RailgunWallet extends AbstractWallet {
      * @returns {Promise<SpendingKeyPair>}
      */
     getSpendingKeyPair(encryptionKey: string): Promise<SpendingKeyPair>;
-    sign(publicInputs: PublicInputsRailgun, encryptionKey: string): Promise<Signature>;
+    sign(publicInputs: PublicInputsRailgun, encryptionKey: string, _signingData?: RailgunTransactionSigningData): Promise<Signature>;
     /**
      * Load encrypted node from database with encryption key
      * @param {BytesData} encryptionKey
@@ -47,11 +47,11 @@ declare class RailgunWallet extends AbstractWallet {
      */
     static loadExisting(db: Database, encryptionKey: string, id: string, prover: Prover): Promise<RailgunWallet>;
 }
-export type SignDelegate = (publicInputs: PublicInputsRailgun) => Promise<Signature>;
+export type SignDelegate = (publicInputs: PublicInputsRailgun, signingData?: RailgunTransactionSigningData) => Promise<Signature>;
 declare class DelegatedSignWallet extends AbstractWallet {
     private readonly signDelegate;
     constructor(id: string, db: Database, viewingKeyPair: ViewingKeyPair, spendingPublicKey: SpendingPublicKey, creationBlockNumbers: Optional<number[][]>, prover: Prover, signDelegate: SignDelegate);
-    sign(publicInputs: PublicInputsRailgun, _encryptionKey: string): Promise<Signature>;
+    sign(publicInputs: PublicInputsRailgun, _encryptionKey: string, signingData?: RailgunTransactionSigningData): Promise<Signature>;
     private static generateID;
     static fromKeys(db: Database, encryptionKey: string, viewingKeyPair: ViewingKeyPair, spendingPublicKey: SpendingPublicKey, creationBlockNumbers: Optional<number[][]>, prover: Prover, signDelegate: SignDelegate): Promise<DelegatedSignWallet>;
     static loadExisting(db: Database, encryptionKey: string, id: string, prover: Prover, signDelegate: SignDelegate): Promise<DelegatedSignWallet>;
