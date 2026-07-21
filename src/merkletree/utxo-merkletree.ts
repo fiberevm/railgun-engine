@@ -1,4 +1,4 @@
-import type { PutBatch } from 'abstract-leveldown';
+import type { AbstractBatch, PutBatch } from 'abstract-leveldown';
 import { Database } from '../database/database';
 import { Chain } from '../models/engine-types';
 import {
@@ -8,7 +8,7 @@ import {
 } from '../models/merkletree-types';
 import { ByteLength, ByteUtils } from '../utils/bytes';
 import { Merkletree } from './merkletree';
-import { Commitment, Nullifier } from '../models/formatted-types';
+import { Commitment, Nullifier, NullifierSpendMetadata } from '../models/formatted-types';
 import { UnshieldStoredEvent } from '../models/event-types';
 import { isDefined, removeUndefineds } from '../utils/is-defined';
 import { TXIDVersion } from '../models';
@@ -75,6 +75,35 @@ export class UTXOMerkletree extends Merkletree<Commitment> {
     ].map((el) => ByteUtils.formatToByteLength(el, ByteLength.UINT_256));
   }
 
+  /** Stores spend height separately so existing nullifier txid records stay backward-compatible. */
+  getNullifierSpendBlockDBPath(tree: number, nullifier: string): string[] {
+    return [
+      ...this.getTreeDBPrefix(tree),
+      ByteUtils.hexlify(ByteUtils.FULL_32_BITS - 3n), // 2^32-4
+      ByteUtils.hexlify(nullifier),
+    ].map((el) => ByteUtils.formatToByteLength(el, ByteLength.UINT_256));
+  }
+
+  private getNullifierBlockIndexDBPrefix(): string[] {
+    return [
+      ...this.getMerkletreeDBPrefix(),
+      ByteUtils.hexlify(ByteUtils.FULL_32_BITS - 4n), // 2^32-5
+    ].map((el) => ByteUtils.formatToByteLength(el, ByteLength.UINT_256));
+  }
+
+  private getNullifierBlockIndexDBPath(
+    blockNumber: number,
+    tree: number,
+    nullifier: string,
+  ): string[] {
+    return [
+      ...this.getNullifierBlockIndexDBPrefix(),
+      ByteUtils.hexlify(blockNumber),
+      ByteUtils.hexlify(tree),
+      ByteUtils.hexlify(nullifier),
+    ].map((el) => ByteUtils.formatToByteLength(el, ByteLength.UINT_256));
+  }
+
   /**
    * Construct DB path from unshield transaction
    * @param txid - unshield txid to get path for
@@ -107,30 +136,53 @@ export class UTXOMerkletree extends Merkletree<Commitment> {
    * @returns Nullifier data, including txid of spent transaction
    */
   async getNullifierTxid(nullifier: string, treeIndex?: number): Promise<Optional<string>> {
-    // Return if nullifier is set
-    let nullifierTxid: Optional<string>;
+    return (await this.getNullifierSpendMetadata(nullifier, treeIndex))?.txid;
+  }
 
-    // Check specific tree if provided
-    if (isDefined(treeIndex)) {
-      try {
-        nullifierTxid = (await this.db.get(this.getNullifierDBPath(treeIndex, nullifier))) as string;
-      } catch {
-        nullifierTxid = undefined;
+  private async getNullifierSpendMetadataForTree(
+    nullifier: string,
+    tree: number,
+  ): Promise<Optional<NullifierSpendMetadata>> {
+    let txid: string;
+    try {
+      txid = (await this.db.get(this.getNullifierDBPath(tree, nullifier))) as string;
+    } catch {
+      return undefined;
+    }
+
+    try {
+      const blockNumberHex = (await this.db.get(
+        this.getNullifierSpendBlockDBPath(tree, nullifier),
+      )) as string;
+      const blockNumber = Number.parseInt(blockNumberHex, 16);
+      if (!Number.isSafeInteger(blockNumber) || blockNumber < 0) {
+        throw new Error('Invalid stored nullifier spend block');
       }
-      return nullifierTxid;
+      return { txid, blockNumber };
+    } catch {
+      // Old databases only retain txid. Callers can prove spend height from its canonical receipt.
+      return { txid, blockNumber: undefined };
+    }
+  }
+
+  /** Gets spend identity and height, with a txid-only fallback for old databases. */
+  async getNullifierSpendMetadata(
+    nullifier: string,
+    treeIndex?: number,
+  ): Promise<Optional<NullifierSpendMetadata>> {
+    if (isDefined(treeIndex)) {
+      return this.getNullifierSpendMetadataForTree(nullifier, treeIndex);
     }
 
     const latestTree = await this.latestTree();
     for (let tree = latestTree; tree >= 0; tree -= 1) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        nullifierTxid = (await this.db.get(this.getNullifierDBPath(tree, nullifier))) as string;
-        break;
-      } catch {
-        nullifierTxid = undefined;
+      // eslint-disable-next-line no-await-in-loop
+      const metadata = await this.getNullifierSpendMetadataForTree(nullifier, tree);
+      if (isDefined(metadata)) {
+        return metadata;
       }
     }
-    return nullifierTxid;
+    return undefined;
   }
 
   /**
@@ -138,17 +190,186 @@ export class UTXOMerkletree extends Merkletree<Commitment> {
    * @param nullifiers - nullifiers to add to db
    */
   async nullify(nullifiers: Nullifier[]): Promise<void> {
-    // Find railgunTxids per nullifier
+    for (const nullifier of nullifiers) {
+      if (!Number.isSafeInteger(nullifier.blockNumber) || nullifier.blockNumber < 0) {
+        throw new Error('Nullifier block number must be a non-negative safe integer');
+      }
+    }
 
-    // Build write batch for nullifiers
-    const nullifierWriteBatch: PutBatch[] = nullifiers.map((nullifier) => ({
-      type: 'put',
-      key: this.getNullifierDBPath(nullifier.treeNumber, nullifier.nullifier).join(':'),
-      value: nullifier.txid,
-    }));
+    const existingMetadata = await Promise.all(
+      nullifiers.map((nullifier) =>
+        this.getNullifierSpendMetadataForTree(nullifier.nullifier, nullifier.treeNumber),
+      ),
+    );
+    const nullifierWriteBatch: AbstractBatch[] = nullifiers.flatMap((nullifier, index) => {
+      const operations: AbstractBatch[] = [];
+      const existingBlockNumber = existingMetadata[index]?.blockNumber;
+      if (isDefined(existingBlockNumber) && existingBlockNumber !== nullifier.blockNumber) {
+        operations.push({
+          type: 'del',
+          key: this.getNullifierBlockIndexDBPath(
+            existingBlockNumber,
+            nullifier.treeNumber,
+            nullifier.nullifier,
+          ).join(':'),
+        });
+      }
+      operations.push(
+        {
+          type: 'put',
+          key: this.getNullifierDBPath(nullifier.treeNumber, nullifier.nullifier).join(':'),
+          value: nullifier.txid,
+        },
+        {
+          type: 'put',
+          key: this.getNullifierSpendBlockDBPath(nullifier.treeNumber, nullifier.nullifier).join(
+            ':',
+          ),
+          value: ByteUtils.hexlify(nullifier.blockNumber),
+        },
+        {
+          type: 'put',
+          key: this.getNullifierBlockIndexDBPath(
+            nullifier.blockNumber,
+            nullifier.treeNumber,
+            nullifier.nullifier,
+          ).join(':'),
+          value: '01',
+        },
+      );
+      return operations;
+    });
 
-    // Write to DB
     return this.db.batch(nullifierWriteBatch);
+  }
+
+  private static parseNullifierBlockIndexKey(
+    key: string,
+  ): Optional<{ blockNumber: number; treeNumber: number; nullifier: string }> {
+    const components = key.split(':');
+    if (components.length < 3) {
+      return undefined;
+    }
+    const [blockNumberHex, treeNumberHex, nullifier] = components.slice(-3);
+    if (!/^[0-9a-f]{64}$/.test(blockNumberHex) || !/^[0-9a-f]{64}$/.test(treeNumberHex)) {
+      return undefined;
+    }
+    const blockNumber = Number.parseInt(blockNumberHex, 16);
+    const treeNumber = Number.parseInt(treeNumberHex, 16);
+    if (
+      !Number.isSafeInteger(blockNumber) ||
+      blockNumber < 0 ||
+      !Number.isSafeInteger(treeNumber) ||
+      treeNumber < 0
+    ) {
+      return undefined;
+    }
+    return { blockNumber, treeNumber, nullifier };
+  }
+
+  /** Atomically replaces nullifiers in a canonical replay range before its cursor advances. */
+  async reconcileNullifiers(
+    startBlock: number,
+    endBlock: number,
+    canonicalNullifiers: Nullifier[],
+    replaceAll: boolean,
+  ): Promise<void> {
+    if (
+      !Number.isSafeInteger(startBlock) ||
+      startBlock < 0 ||
+      !Number.isSafeInteger(endBlock) ||
+      endBlock < startBlock
+    ) {
+      throw new Error('Nullifier reconciliation range is invalid');
+    }
+    for (const nullifier of canonicalNullifiers) {
+      if (nullifier.blockNumber < startBlock || nullifier.blockNumber > endBlock) {
+        throw new Error('Canonical nullifier is outside reconciliation range');
+      }
+    }
+
+    const indexKeys = await this.db.getNamespaceKeys(this.getNullifierBlockIndexDBPrefix());
+    const deleteKeys = new Set<string>();
+    const preservedDataKeys = new Set<string>();
+    for (const indexKey of indexKeys) {
+      const index = UTXOMerkletree.parseNullifierBlockIndexKey(indexKey);
+      if (!isDefined(index)) {
+        if (replaceAll) {
+          deleteKeys.add(indexKey);
+        }
+        continue;
+      }
+      const isInReplayRange = index.blockNumber >= startBlock && index.blockNumber <= endBlock;
+      const shouldDelete = replaceAll ? index.blockNumber <= endBlock : isInReplayRange;
+      if (shouldDelete) {
+        deleteKeys.add(indexKey);
+        deleteKeys.add(this.getNullifierDBPath(index.treeNumber, index.nullifier).join(':'));
+        deleteKeys.add(
+          this.getNullifierSpendBlockDBPath(index.treeNumber, index.nullifier).join(':'),
+        );
+      } else if (replaceAll) {
+        preservedDataKeys.add(this.getNullifierDBPath(index.treeNumber, index.nullifier).join(':'));
+        preservedDataKeys.add(
+          this.getNullifierSpendBlockDBPath(index.treeNumber, index.nullifier).join(':'),
+        );
+      }
+    }
+
+    if (replaceAll) {
+      const latestTree = await this.latestTree();
+      for (let tree = 0; tree <= latestTree; tree += 1) {
+        // Legacy databases have no block index, so first canonical replay removes both lanes.
+        // eslint-disable-next-line no-await-in-loop
+        const nullifierKeys = await this.db.getNamespaceKeys(
+          this.getNullifierDBPath(tree, '').slice(0, -1),
+        );
+        // eslint-disable-next-line no-await-in-loop
+        const spendBlockKeys = await this.db.getNamespaceKeys(
+          this.getNullifierSpendBlockDBPath(tree, '').slice(0, -1),
+        );
+        nullifierKeys.forEach((key) => {
+          if (!preservedDataKeys.has(key)) {
+            deleteKeys.add(key);
+          }
+        });
+        spendBlockKeys.forEach((key) => {
+          if (!preservedDataKeys.has(key)) {
+            deleteKeys.add(key);
+          }
+        });
+      }
+    }
+
+    const reconcileBatch: AbstractBatch[] = Array.from(deleteKeys).map((key) => ({
+      type: 'del',
+      key,
+    }));
+    canonicalNullifiers.forEach((nullifier) => {
+      reconcileBatch.push(
+        {
+          type: 'put',
+          key: this.getNullifierDBPath(nullifier.treeNumber, nullifier.nullifier).join(':'),
+          value: nullifier.txid,
+        },
+        {
+          type: 'put',
+          key: this.getNullifierSpendBlockDBPath(nullifier.treeNumber, nullifier.nullifier).join(
+            ':',
+          ),
+          value: ByteUtils.hexlify(nullifier.blockNumber),
+        },
+        {
+          type: 'put',
+          key: this.getNullifierBlockIndexDBPath(
+            nullifier.blockNumber,
+            nullifier.treeNumber,
+            nullifier.nullifier,
+          ).join(':'),
+          value: '01',
+        },
+      );
+    });
+    await this.db.batch(reconcileBatch);
   }
 
   /**

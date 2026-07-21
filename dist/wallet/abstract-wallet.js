@@ -579,13 +579,12 @@ class AbstractWallet extends events_1.default {
                 ...receiveCommitment.decrypted,
                 recipientAddress,
             }, vpk, this.tokenDataGetter);
-            // Check if TXO has been spent.
-            if (receiveCommitment.spendtxid === false) {
-                const nullifierTxid = await merkletree.getNullifierTxid(receiveCommitment.nullifier, tree);
-                if ((0, is_defined_1.isDefined)(nullifierTxid)) {
-                    receiveCommitment.spendtxid = nullifierTxid;
-                    await this.updateReceiveCommitmentInDB(chain, tree, position, receiveCommitment);
-                }
+            // Reconcile persisted spend state so a canonical replay can remove orphaned nullifiers.
+            const nullifierSpendMetadata = await merkletree.getNullifierSpendMetadata(receiveCommitment.nullifier, tree);
+            const canonicalSpendtxid = nullifierSpendMetadata?.txid ?? false;
+            if (receiveCommitment.spendtxid !== canonicalSpendtxid) {
+                receiveCommitment.spendtxid = canonicalSpendtxid;
+                await this.updateReceiveCommitmentInDB(chain, tree, position, receiveCommitment);
             }
             // Look up blinded commitment.
             if (!(0, is_defined_1.isDefined)(receiveCommitment.blindedCommitment) ||
@@ -623,6 +622,10 @@ class AbstractWallet extends events_1.default {
                 txid: receiveCommitment.txid,
                 timestamp: receiveCommitment.timestamp,
                 spendtxid: receiveCommitment.spendtxid,
+                spendBlockNumber: receiveCommitment.spendtxid !== false &&
+                    nullifierSpendMetadata?.txid === receiveCommitment.spendtxid
+                    ? nullifierSpendMetadata.blockNumber
+                    : undefined,
                 nullifier: receiveCommitment.nullifier,
                 note,
                 blindedCommitment: receiveCommitment.blindedCommitment,

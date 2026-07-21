@@ -7,6 +7,7 @@ export type TXO = {
     timestamp: Optional<number>;
     blockNumber: number;
     spendtxid: string | false;
+    spendBlockNumber?: number;
     nullifier: string;
     note: TransactNote;
     blindedCommitment: Optional<string>;

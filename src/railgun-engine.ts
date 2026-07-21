@@ -74,6 +74,40 @@ import { Registry } from './utils/registry';
 import { stringToBigInt } from './utils/bigint';
 import { isTransactCommitment } from './utils/commitment';
 
+export type RailgunFinalizedScanCursors = {
+  commitmentsScannedThroughBlock: number;
+  commitmentsScannedThroughBlockHash: string;
+  nullifiersScannedThroughBlock: number;
+  nullifiersScannedThroughBlockHash: string;
+};
+
+export type RailgunFinalizedScanResult = {
+  txidVersion: TXIDVersion;
+  chain: Chain;
+  targetBlock: number;
+  targetBlockHash: string;
+  scannedThroughBlock: number;
+  cursors: RailgunFinalizedScanCursors;
+};
+
+export type RailgunFinalizedScanCursorState = {
+  commitmentsScannedThroughBlock: Optional<number>;
+  commitmentsScannedThroughBlockHash: Optional<string>;
+  nullifiersScannedThroughBlock: Optional<number>;
+  nullifiersScannedThroughBlockHash: Optional<string>;
+};
+
+type RailgunFinalizedScanCursorKind = 'commitments' | 'nullifiers';
+
+type RailgunFinalizedScanCursor = {
+  blockNumber: number;
+  blockHash: string;
+};
+
+type RailgunBlockHashProvider = {
+  getBlock: (blockNumber: number) => Promise<null | { hash: null | string }>;
+};
+
 class RailgunEngine extends EventEmitter {
   readonly db: Database;
 
@@ -184,7 +218,7 @@ class RailgunEngine extends EventEmitter {
     events: CommitmentEvent[],
     shouldUpdateTrees: boolean,
     shouldTriggerV2TxidSync: boolean,
-    skipValidation = false
+    skipValidation = false,
   ): Promise<void> {
     if (this.db.isClosed()) {
       return;
@@ -265,18 +299,19 @@ class RailgunEngine extends EventEmitter {
     }
     EngineDebug.log(`engine.nullifierListener[${chain.type}:${chain.id}] ${nullifiers.length}`);
 
-    for (const nullifier of nullifiers) {
-      nullifier.txid = ByteUtils.formatToByteLength(nullifier.txid, ByteLength.UINT_256, false);
-      nullifier.nullifier = ByteUtils.formatToByteLength(
-        nullifier.nullifier,
-        ByteLength.UINT_256,
-        false,
-      );
-    }
+    const formattedNullifiers = RailgunEngine.formatNullifiers(nullifiers);
     const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
-    await utxoMerkletree.nullify(nullifiers);
+    await utxoMerkletree.nullify(formattedNullifiers);
 
     this.invalidateTXOsCacheAllWallets(chain);
+  }
+
+  private static formatNullifiers(nullifiers: Nullifier[]): Nullifier[] {
+    return nullifiers.map((nullifier) => ({
+      ...nullifier,
+      txid: ByteUtils.formatToByteLength(nullifier.txid, ByteLength.UINT_256, false),
+      nullifier: ByteUtils.formatToByteLength(nullifier.nullifier, ByteLength.UINT_256, false),
+    }));
   }
 
   /**
@@ -406,7 +441,6 @@ class RailgunEngine extends EventEmitter {
     chain: Chain,
     endProgress: number,
     retryCount = 0,
-    throwOnFailure = false,
   ): Promise<any> {
     try {
       EngineDebug.log(`[${txidVersion}] quickSync: chain ${chain.type}:${chain.id}`);
@@ -454,17 +488,8 @@ class RailgunEngine extends EventEmitter {
       }
     } catch (cause) {
       if (retryCount < 1) {
-        await this.performQuickSync(
-          txidVersion,
-          chain,
-          endProgress,
-          retryCount + 1,
-          throwOnFailure,
-        );
+        await this.performQuickSync(txidVersion, chain, endProgress, retryCount + 1);
         return;
-      }
-      if (throwOnFailure) {
-        throw new Error('Failed to quick sync', { cause });
       }
       EngineDebug.error(new Error('Failed to quick sync', { cause }));
     }
@@ -530,35 +555,52 @@ class RailgunEngine extends EventEmitter {
     await this.scanTXIDHistoryV2(chain);
   }
 
-  /** Scans V2 history and proves selected wallet balances cover a minimum block. */
+  /** Scans through a caller-finalized target and verifies its canonical hash before export. */
   async scanWalletBalancesThroughBlock(
     txidVersion: TXIDVersion,
     chain: Chain,
     walletIdFilter: string[],
-    minimumBlockNumber: number,
-  ): Promise<{ scannedThroughBlock: number }> {
-    if (txidVersion !== TXIDVersion.V2_PoseidonMerkle) {
-      throw new Error('Wallet balance scan proof only supports V2 trees');
-    }
-    if (!Number.isSafeInteger(minimumBlockNumber) || minimumBlockNumber < 0) {
-      throw new Error('Minimum scan block must be a non-negative safe integer');
+    targetBlock: number,
+    targetBlockHash: string,
+  ): Promise<RailgunFinalizedScanResult> {
+    if (!Number.isSafeInteger(targetBlock) || targetBlock < 0) {
+      throw new Error('Finalized scan target must be a non-negative safe integer');
     }
     if (walletIdFilter.length === 0) {
-      throw new Error('Wallet balance scan proof requires at least one wallet');
+      throw new Error('Finalized scan requires at least one wallet');
     }
+    if (new Set(walletIdFilter).size !== walletIdFilter.length) {
+      throw new Error('Finalized scan wallet IDs must be unique');
+    }
+    const normalizedTargetBlockHash = RailgunEngine.normalizeBlockHash(targetBlockHash);
 
-    let scannedThroughBlock: Optional<number>;
+    let validatedCursors: Optional<RailgunFinalizedScanCursors>;
     await this.scanUTXOHistory(txidVersion, chain, walletIdFilter, {
-      minimumBlock: minimumBlockNumber,
+      finalizedTargetBlock: targetBlock,
+      finalizedTargetBlockHash: normalizedTargetBlockHash,
       throwOnFailure: true,
-      onValidatedScan: (blockNumber) => {
-        scannedThroughBlock = blockNumber;
+      onValidatedFinalizedScan: (cursors) => {
+        validatedCursors = cursors;
       },
     });
-    if (!isDefined(scannedThroughBlock) || scannedThroughBlock < minimumBlockNumber) {
-      throw new Error('Wallet balance scan did not reach its minimum block');
+    if (!isDefined(validatedCursors)) {
+      throw new Error('Finalized wallet scan completed without validated cursors');
     }
-    return { scannedThroughBlock };
+    const scannedThroughBlock = Math.min(
+      validatedCursors.commitmentsScannedThroughBlock,
+      validatedCursors.nullifiersScannedThroughBlock,
+    );
+    if (scannedThroughBlock < targetBlock) {
+      throw new Error('Finalized wallet scan did not reach its target block');
+    }
+    return {
+      txidVersion,
+      chain,
+      targetBlock,
+      targetBlockHash: normalizedTargetBlockHash,
+      scannedThroughBlock,
+      cursors: validatedCursors,
+    };
   }
 
   /**
@@ -569,21 +611,22 @@ class RailgunEngine extends EventEmitter {
     chain: Chain,
     walletIdFilter: Optional<string[]>,
     options: {
-      minimumBlock?: number;
+      finalizedTargetBlock?: number;
+      finalizedTargetBlockHash?: string;
       throwOnFailure?: boolean;
-      onValidatedScan?: (blockNumber: number) => void;
+      onValidatedFinalizedScan?: (cursors: RailgunFinalizedScanCursors) => void;
     } = {},
   ): Promise<void> {
     if (this.skipMerkletreeScans) {
       if (options.throwOnFailure === true) {
-        throw new Error('Cannot prove wallet balances: merkletree scans are disabled');
+        throw new Error('Cannot create finalized snapshot: merkletree scans are disabled');
       }
       EngineDebug.log(`Skipping merkletree scan: skipMerkletreeScans set on RAILGUN Engine.`);
       return;
     }
     if (!this.hasUTXOMerkletree(txidVersion, chain)) {
       if (options.throwOnFailure === true) {
-        throw new Error('Cannot prove wallet balances: UTXO merkletree is not loaded');
+        throw new Error('Cannot create finalized snapshot: UTXO merkletree is not loaded');
       }
       EngineDebug.log(
         `Cannot scan history. UTXO merkletree not yet loaded for ${txidVersion}, chain ${chain.type}:${chain.id}.`,
@@ -592,7 +635,7 @@ class RailgunEngine extends EventEmitter {
     }
     if (!isDefined(ContractStore.railgunSmartWalletContracts.get(null, chain))) {
       if (options.throwOnFailure === true) {
-        throw new Error('Cannot prove wallet balances: Railgun contract is not loaded');
+        throw new Error('Cannot create finalized snapshot: Railgun contract is not loaded');
       }
       EngineDebug.log(
         `Cannot scan history. Proxy contract not yet loaded for chain ${chain.type}:${chain.id}.`,
@@ -614,7 +657,7 @@ class RailgunEngine extends EventEmitter {
     if (utxoMerkletree.isScanning) {
       // Do not allow multiple simultaneous scans.
       if (options.throwOnFailure === true) {
-        throw new Error('Cannot prove wallet balances while another scan is running');
+        throw new Error('Cannot create finalized snapshot while another scan is running');
       }
       EngineDebug.log('Already scanning. Stopping additional re-scan.');
       return;
@@ -625,77 +668,63 @@ class RailgunEngine extends EventEmitter {
       this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, 0.03); // 3%
 
       const postQuickSyncProgress = 0.5;
-      let durableStrictCursor: Optional<number>;
-      if (options.throwOnFailure === true) {
-        if (
-          !isDefined(options.minimumBlock) ||
-          !Number.isSafeInteger(options.minimumBlock) ||
-          options.minimumBlock < 0
-        ) {
-          throw new Error('Strict wallet balance scan requires a valid minimum block');
-        }
-        durableStrictCursor = await this.getLastSyncedBlock(txidVersion, chain);
-        if (
-          isDefined(durableStrictCursor) &&
-          (!Number.isSafeInteger(durableStrictCursor) || durableStrictCursor < 0)
-        ) {
-          throw new Error('Wallet balance scan has an invalid durable cursor');
-        }
-      }
-      const strictHistoryAlreadyCovered =
-        options.throwOnFailure === true &&
-        isDefined(options.minimumBlock) &&
-        isDefined(durableStrictCursor) &&
-        durableStrictCursor >= options.minimumBlock;
-
-      if (!strictHistoryAlreadyCovered) {
-        await this.performQuickSync(
-          txidVersion,
-          chain,
-          postQuickSyncProgress,
-          0,
-          options.throwOnFailure,
-        );
-      }
-      this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, postQuickSyncProgress); // 50%
 
       const railgunSmartWalletContract = ContractStore.railgunSmartWalletContracts.get(null, chain);
-      if (!railgunSmartWalletContract?.contract.runner?.provider) {
+      const provider = railgunSmartWalletContract?.contract.runner?.provider;
+      if (!isDefined(railgunSmartWalletContract) || !isDefined(provider)) {
         throw new Error('Requires RailgunSmartWalletContract with provider');
       }
-      const providerLatestBlock =
-        await railgunSmartWalletContract.contract.runner.provider.getBlockNumber();
-      if (isDefined(options.minimumBlock) && providerLatestBlock < options.minimumBlock) {
-        throw new Error('Provider has not reached the minimum wallet scan block');
+      const providerLatestBlock = await provider.getBlockNumber();
+      const { finalizedTargetBlock, finalizedTargetBlockHash } = options;
+      const isFinalizedScan = isDefined(finalizedTargetBlock);
+      if (isFinalizedScan && finalizedTargetBlock > providerLatestBlock) {
+        throw new Error('Provider has not reached the finalized scan target');
       }
-      if (!strictHistoryAlreadyCovered) {
-        let startScanningBlockSlowScan: number;
-        if (options.throwOnFailure === true) {
-          // Strict scans resume from durable history, not a quick-sync commitment height.
-          const strictStartBlock =
-            durableStrictCursor ?? this.deploymentBlocks.get(txidVersion, chain);
-          if (!isDefined(strictStartBlock)) {
-            throw new Error('Cannot prove wallet balances without a scan start block');
-          }
-          startScanningBlockSlowScan = strictStartBlock;
-        } else {
-          // Get updated start-scanning block from new valid utxoMerkletree.
-          startScanningBlockSlowScan = await this.getNextStartingBlockSlowScan(txidVersion, chain);
+      if (isFinalizedScan) {
+        if (!isDefined(finalizedTargetBlockHash)) {
+          throw new Error('Finalized scan requires a target block hash');
         }
-        EngineDebug.log(
-          `[${txidVersion}] startScanningBlockSlowScan: ${startScanningBlockSlowScan}`,
+        await RailgunEngine.assertCanonicalBlockHash(
+          provider,
+          finalizedTargetBlock,
+          finalizedTargetBlockHash,
         );
+      }
 
-        // Strict callers need finalized coverage only; do not make unfinalized tip part of proof.
-        const scanEndBlock = options.minimumBlock ?? providerLatestBlock;
+      const latestBlock = options.finalizedTargetBlock ?? providerLatestBlock;
+      let startScanningBlockSlowScan: number;
+      let replaceAllFinalizedNullifiers = false;
+      if (isFinalizedScan) {
+        const deploymentBlock = this.deploymentBlocks.get(txidVersion, chain);
+        if (!isDefined(deploymentBlock)) {
+          throw new Error('Finalized scan requires a deployment block');
+        }
+        startScanningBlockSlowScan = await this.getFinalizedScanStartBlock(
+          txidVersion,
+          chain,
+          deploymentBlock,
+          (blockNumber) => RailgunEngine.getCanonicalBlockHash(provider, blockNumber),
+        );
+        replaceAllFinalizedNullifiers = startScanningBlockSlowScan === deploymentBlock;
+      } else {
+        await this.performQuickSync(txidVersion, chain, postQuickSyncProgress);
+        startScanningBlockSlowScan = await this.getNextStartingBlockSlowScan(txidVersion, chain);
+      }
+      this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, postQuickSyncProgress); // 50%
+      EngineDebug.log(`[${txidVersion}] startScanningBlockSlowScan: ${startScanningBlockSlowScan}`);
+
+      if (startScanningBlockSlowScan <= latestBlock) {
         switch (txidVersion) {
           case TXIDVersion.V2_PoseidonMerkle:
             await this.slowSyncV2(
               chain,
               utxoMerkletree,
               startScanningBlockSlowScan,
-              scanEndBlock,
+              latestBlock,
               postQuickSyncProgress,
+              isFinalizedScan,
+              replaceAllFinalizedNullifiers,
+              finalizedTargetBlockHash,
             );
             break;
           case TXIDVersion.V3_PoseidonMerkle:
@@ -703,18 +732,45 @@ class RailgunEngine extends EventEmitter {
               chain,
               utxoMerkletree,
               startScanningBlockSlowScan,
-              scanEndBlock,
+              latestBlock,
               postQuickSyncProgress,
+              isFinalizedScan,
+              replaceAllFinalizedNullifiers,
+              finalizedTargetBlockHash,
             );
             break;
         }
+      } else if (isFinalizedScan) {
+        // Targets before deployment are empty; existing later cursors also satisfy target.
+        if (!isDefined(finalizedTargetBlockHash)) {
+          throw new Error('Finalized scan requires a target block hash');
+        }
+        await Promise.all([
+          this.setFinalizedScanCursor(
+            txidVersion,
+            chain,
+            'commitments',
+            latestBlock,
+            finalizedTargetBlockHash,
+          ),
+          this.setFinalizedScanCursor(
+            txidVersion,
+            chain,
+            'nullifiers',
+            latestBlock,
+            finalizedTargetBlockHash,
+          ),
+        ]);
       }
 
       const { tree: latestTree } = await utxoMerkletree.getLatestTreeAndIndex();
       // check roots for trees up to this tree on 'scan'
       for (let treeIndex = 0; treeIndex <= latestTree; treeIndex += 1) {
+        // eslint-disable-next-line no-await-in-loop
         const index = await utxoMerkletree.getLatestIndexForTree(treeIndex);
+        // eslint-disable-next-line no-await-in-loop
         const root = await utxoMerkletree.getRoot(treeIndex);
+        // eslint-disable-next-line no-await-in-loop
         const isValid = await RailgunEngine.validateMerkleroot(
           txidVersion,
           chain,
@@ -722,14 +778,12 @@ class RailgunEngine extends EventEmitter {
           index,
           root,
         );
-        EngineDebug.log(
-          `[${txidVersion}] MerkleRootValid (Tree ${treeIndex}): ${isValid}`,
-        );
+        EngineDebug.log(`[${txidVersion}] MerkleRootValid (Tree ${treeIndex}): ${String(isValid)}`);
         if (!isValid) {
           throw new Error(`Invalid merkleroot: ${root}. Tree: ${treeIndex}. Index: ${index}.`);
         }
       }
-    
+
       // Final balance decryption after all leaves added.
       const decryptStartingProgress = 0.7;
       await this.decryptBalancesAllWallets(
@@ -745,17 +799,23 @@ class RailgunEngine extends EventEmitter {
       );
 
       if (options.throwOnFailure === true) {
-        if (!isDefined(options.minimumBlock)) {
-          throw new Error('Strict wallet balance scan requires a minimum block');
+        if (
+          !isDefined(options.finalizedTargetBlock) ||
+          !isDefined(options.finalizedTargetBlockHash) ||
+          !isDefined(walletIdFilter)
+        ) {
+          throw new Error('Strict wallet scan requires target block and wallet IDs');
         }
-        await this.assertWalletBalancesDecrypted(txidVersion, chain, walletIdFilter ?? []);
-        const validatedCursor = await this.getValidatedWalletScanCursor(
+        await this.assertWalletBalancesDecrypted(txidVersion, chain, walletIdFilter);
+        const cursors = await this.getValidatedFinalizedScanCursors(
           txidVersion,
           chain,
-          options.minimumBlock,
+          options.finalizedTargetBlock,
+          options.finalizedTargetBlockHash,
           providerLatestBlock,
+          provider,
         );
-        options.onValidatedScan?.(validatedCursor);
+        options.onValidatedFinalizedScan?.(cursors);
       }
 
       this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, 0.97); // 97%
@@ -795,6 +855,82 @@ class RailgunEngine extends EventEmitter {
     }
   }
 
+  private async getValidatedFinalizedScanCursors(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+    targetBlock: number,
+    targetBlockHash: string,
+    providerBlock: number,
+    provider: RailgunBlockHashProvider,
+  ): Promise<RailgunFinalizedScanCursors> {
+    const cursors = await this.getFinalizedScanCursors(txidVersion, chain);
+    const {
+      commitmentsScannedThroughBlock,
+      commitmentsScannedThroughBlockHash,
+      nullifiersScannedThroughBlock,
+      nullifiersScannedThroughBlockHash,
+    } = cursors;
+    if (
+      !isDefined(commitmentsScannedThroughBlock) ||
+      !isDefined(commitmentsScannedThroughBlockHash) ||
+      !isDefined(nullifiersScannedThroughBlock) ||
+      !isDefined(nullifiersScannedThroughBlockHash) ||
+      commitmentsScannedThroughBlock < targetBlock ||
+      nullifiersScannedThroughBlock < targetBlock ||
+      commitmentsScannedThroughBlock > providerBlock ||
+      nullifiersScannedThroughBlock > providerBlock
+    ) {
+      throw new Error('Finalized scan cursors are outside the validated range');
+    }
+    await Promise.all([
+      RailgunEngine.assertCanonicalBlockHash(provider, targetBlock, targetBlockHash),
+      RailgunEngine.assertCanonicalBlockHash(
+        provider,
+        commitmentsScannedThroughBlock,
+        commitmentsScannedThroughBlockHash,
+      ),
+      RailgunEngine.assertCanonicalBlockHash(
+        provider,
+        nullifiersScannedThroughBlock,
+        nullifiersScannedThroughBlockHash,
+      ),
+    ]);
+    return {
+      commitmentsScannedThroughBlock,
+      commitmentsScannedThroughBlockHash,
+      nullifiersScannedThroughBlock,
+      nullifiersScannedThroughBlockHash,
+    };
+  }
+
+  private async assertWalletBalancesDecrypted(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+    walletIdFilter: string[],
+  ): Promise<void> {
+    const requestedWalletIds = new Set(walletIdFilter);
+    const wallets = this.allWallets().filter((wallet) => requestedWalletIds.has(wallet.id));
+    if (wallets.length !== requestedWalletIds.size) {
+      throw new Error('Cannot prove balances for an unloaded wallet');
+    }
+
+    const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
+    const { tree: latestTree } = await utxoMerkletree.getLatestTreeAndIndex();
+    for (const wallet of wallets) {
+      // Wallet decryption catches internal errors, so verify its saved scan heights here.
+      // eslint-disable-next-line no-await-in-loop
+      const walletDetails = await wallet.getWalletDetails(txidVersion, chain);
+      const firstWalletTree = walletDetails.creationTree ?? 0;
+      for (let tree = firstWalletTree; tree <= latestTree; tree += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const treeLength = await utxoMerkletree.getTreeLength(tree);
+        if ((walletDetails.treeScannedHeights[tree] ?? 0) < treeLength) {
+          throw new Error(`Wallet balance decryption is incomplete for tree ${tree}`);
+        }
+      }
+    }
+  }
+
   emitScanEventHistoryComplete(txidVersion: TXIDVersion, chain: Chain) {
     this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, 1.0); // 100%
     const scanCompleteData: MerkletreeHistoryScanEventData = {
@@ -811,6 +947,9 @@ class RailgunEngine extends EventEmitter {
     startScanningBlockSlowScan: number,
     latestBlock: number,
     postQuickSyncProgress: number,
+    isFinalizedScan = false,
+    replaceAllNullifiers = false,
+    finalizedTargetBlockHash?: string,
   ) {
     const txidVersion = TXIDVersion.V2_PoseidonMerkle;
 
@@ -818,9 +957,18 @@ class RailgunEngine extends EventEmitter {
     if (!isDefined(railgunSmartWalletContract)) {
       throw new Error('Requires RailgunSmartWallet contract');
     }
+    const provider = railgunSmartWalletContract.contract.runner?.provider;
+    if (!isDefined(provider)) {
+      throw new Error('Slow scan requires a provider');
+    }
+    if (isFinalizedScan && !isDefined(finalizedTargetBlockHash)) {
+      throw new Error('Finalized scan requires a target block hash');
+    }
+    const targetBlockHashForFinalizedScan = finalizedTargetBlockHash ?? '';
 
-    const totalBlocksToScan = latestBlock - startScanningBlockSlowScan;
+    const totalBlocksToScan = Math.max(1, latestBlock - startScanningBlockSlowScan + 1);
     EngineDebug.log(`[${txidVersion}] Total blocks to SlowScan: ${totalBlocksToScan}`);
+    const canonicalNullifiers: Nullifier[] = [];
 
     await railgunSmartWalletContract.getHistoricalEvents(
       startScanningBlockSlowScan,
@@ -836,26 +984,75 @@ class RailgunEngine extends EventEmitter {
         );
       },
       async (_txidVersion: TXIDVersion, nullifiers: Nullifier[]) => {
-        await this.nullifierListener(txidVersion, chain, nullifiers);
+        if (isFinalizedScan) {
+          canonicalNullifiers.push(...RailgunEngine.formatNullifiers(nullifiers));
+        } else {
+          await this.nullifierListener(txidVersion, chain, nullifiers);
+        }
       },
       async (_txidVersion: TXIDVersion, unshields: UnshieldStoredEvent[]) => {
         await this.unshieldListener(txidVersion, chain, unshields);
       },
       async (syncedBlock: number) => {
-        const scannedBlocks = syncedBlock - startScanningBlockSlowScan;
+        const scannedBlocks = syncedBlock - startScanningBlockSlowScan + 1;
 
         const progress =
           postQuickSyncProgress +
           ((1 - postQuickSyncProgress - 0.3) * scannedBlocks) / totalBlocksToScan;
         this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, progress);
         if (utxoMerkletree.getFirstInvalidMerklerootTree() != null) {
+          if (isFinalizedScan) {
+            throw new Error('Finalized scan encountered an invalid merkleroot');
+          }
           // Do not save lastSyncedBlock in case of merkleroot error.
           // This will force a scan from the last valid commitment on next run.
           return;
         }
         await this.setLastSyncedBlock(txidVersion, chain, syncedBlock);
+        if (isFinalizedScan) {
+          const blockHash = await RailgunEngine.getBlockHashUnderFinalizedTarget(
+            provider,
+            syncedBlock,
+            latestBlock,
+            targetBlockHashForFinalizedScan,
+          );
+          await this.setFinalizedScanCursor(
+            txidVersion,
+            chain,
+            'commitments',
+            syncedBlock,
+            blockHash,
+          );
+        }
       },
+      { strictSequential: isFinalizedScan },
     );
+    if (isFinalizedScan) {
+      await RailgunEngine.assertCanonicalBlockHash(
+        provider,
+        latestBlock,
+        targetBlockHashForFinalizedScan,
+      );
+      await utxoMerkletree.reconcileNullifiers(
+        startScanningBlockSlowScan,
+        latestBlock,
+        canonicalNullifiers,
+        replaceAllNullifiers,
+      );
+      this.invalidateTXOsCacheAllWallets(chain);
+      await RailgunEngine.assertCanonicalBlockHash(
+        provider,
+        latestBlock,
+        targetBlockHashForFinalizedScan,
+      );
+      await this.setFinalizedScanCursor(
+        txidVersion,
+        chain,
+        'nullifiers',
+        latestBlock,
+        targetBlockHashForFinalizedScan,
+      );
+    }
   }
 
   private async slowSyncV3(
@@ -864,6 +1061,9 @@ class RailgunEngine extends EventEmitter {
     startScanningBlockSlowScan: number,
     latestBlock: number,
     postQuickSyncProgress: number,
+    isFinalizedScan = false,
+    replaceAllNullifiers = false,
+    finalizedTargetBlockHash?: string,
   ) {
     const txidVersion = TXIDVersion.V3_PoseidonMerkle;
 
@@ -872,9 +1072,18 @@ class RailgunEngine extends EventEmitter {
     if (!isDefined(poseidonMerkleAccumulatorV3Contract)) {
       throw new Error('Requires V3PoseidonMerkleAccumulator contract');
     }
+    const provider = poseidonMerkleAccumulatorV3Contract.contract.runner?.provider;
+    if (!isDefined(provider)) {
+      throw new Error('Slow scan requires a provider');
+    }
+    if (isFinalizedScan && !isDefined(finalizedTargetBlockHash)) {
+      throw new Error('Finalized scan requires a target block hash');
+    }
+    const targetBlockHashForFinalizedScan = finalizedTargetBlockHash ?? '';
 
-    const totalBlocksToScan = latestBlock - startScanningBlockSlowScan;
+    const totalBlocksToScan = Math.max(1, latestBlock - startScanningBlockSlowScan + 1);
     EngineDebug.log(`[${txidVersion}] Total blocks to SlowScan: ${totalBlocksToScan}`);
+    const canonicalNullifiers: Nullifier[] = [];
 
     await poseidonMerkleAccumulatorV3Contract.getHistoricalEvents(
       startScanningBlockSlowScan,
@@ -890,7 +1099,11 @@ class RailgunEngine extends EventEmitter {
         );
       },
       async (_txidVersion: TXIDVersion, nullifiers: Nullifier[]) => {
-        await this.nullifierListener(txidVersion, chain, nullifiers);
+        if (isFinalizedScan) {
+          canonicalNullifiers.push(...RailgunEngine.formatNullifiers(nullifiers));
+        } else {
+          await this.nullifierListener(txidVersion, chain, nullifiers);
+        }
       },
       async (_txidVersion: TXIDVersion, unshields: UnshieldStoredEvent[]) => {
         await this.unshieldListener(txidVersion, chain, unshields);
@@ -899,20 +1112,65 @@ class RailgunEngine extends EventEmitter {
         await this.railgunTransactionsV3Listener(txidVersion, chain, railgunTransactions);
       },
       async (syncedBlock: number) => {
-        const scannedBlocks = syncedBlock - startScanningBlockSlowScan;
+        const scannedBlocks = syncedBlock - startScanningBlockSlowScan + 1;
         const progress =
           postQuickSyncProgress +
           ((1 - postQuickSyncProgress - 0.3) * scannedBlocks) / totalBlocksToScan;
         this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, progress);
 
         if (utxoMerkletree.getFirstInvalidMerklerootTree() != null) {
+          if (isFinalizedScan) {
+            throw new Error('Finalized scan encountered an invalid merkleroot');
+          }
           // Do not save lastSyncedBlock in case of merkleroot error.
           // This will force a scan from the last valid commitment on next run.
           return;
         }
         await this.setLastSyncedBlock(txidVersion, chain, syncedBlock);
+        if (isFinalizedScan) {
+          const blockHash = await RailgunEngine.getBlockHashUnderFinalizedTarget(
+            provider,
+            syncedBlock,
+            latestBlock,
+            targetBlockHashForFinalizedScan,
+          );
+          await this.setFinalizedScanCursor(
+            txidVersion,
+            chain,
+            'commitments',
+            syncedBlock,
+            blockHash,
+          );
+        }
       },
+      { strictSequential: isFinalizedScan },
     );
+    if (isFinalizedScan) {
+      await RailgunEngine.assertCanonicalBlockHash(
+        provider,
+        latestBlock,
+        targetBlockHashForFinalizedScan,
+      );
+      await utxoMerkletree.reconcileNullifiers(
+        startScanningBlockSlowScan,
+        latestBlock,
+        canonicalNullifiers,
+        replaceAllNullifiers,
+      );
+      this.invalidateTXOsCacheAllWallets(chain);
+      await RailgunEngine.assertCanonicalBlockHash(
+        provider,
+        latestBlock,
+        targetBlockHashForFinalizedScan,
+      );
+      await this.setFinalizedScanCursor(
+        txidVersion,
+        chain,
+        'nullifiers',
+        latestBlock,
+        targetBlockHashForFinalizedScan,
+      );
+    }
   }
 
   /**
@@ -1029,7 +1287,8 @@ class RailgunEngine extends EventEmitter {
         latestRailgunTransaction as RailgunTransactionV2;
       let txidMerkletreeStartScanPercentage = 0.2; // 20%
       while (isLooping) {
-        const railgunTransactionsRAW: RailgunTransactionV2[] =  await this.quickSyncRailgunTransactionsV2(chain, latestTranasction?.graphID);
+        const railgunTransactionsRAW: RailgunTransactionV2[] =
+          await this.quickSyncRailgunTransactionsV2(chain, latestTranasction?.graphID);
         railgunTransactions.push(...railgunTransactionsRAW);
         latestTranasction = railgunTransactionsRAW[railgunTransactionsRAW.length - 1];
         this.emitTXIDMerkletreeScanUpdateEvent(
@@ -1368,7 +1627,15 @@ class RailgunEngine extends EventEmitter {
       // eslint-disable-next-line no-await-in-loop
       await utxoMerkletree.clearDataForMerkletree();
       // eslint-disable-next-line no-await-in-loop
-      await this.db.clearNamespace(RailgunEngine.getLastSyncedBlockDBPrefix(txidVersion, chain));
+      await Promise.all([
+        this.db.clearNamespace(RailgunEngine.getLastSyncedBlockDBPrefix(txidVersion, chain)),
+        this.db.clearNamespace(
+          RailgunEngine.getFinalizedScanCursorDBPrefix(txidVersion, chain, 'commitments'),
+        ),
+        this.db.clearNamespace(
+          RailgunEngine.getFinalizedScanCursorDBPrefix(txidVersion, chain, 'nullifiers'),
+        ),
+      ]);
     }
   }
 
@@ -1717,13 +1984,13 @@ class RailgunEngine extends EventEmitter {
       // Only start wallet balance decryption if utxoMerkletree is not already scanning
       const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
       if (!utxoMerkletree.isScanning) {
-      await this.commitmentListener(
-        txidVersion,
-        chain,
-        commitmentEvents,
-        true, // shouldUpdateTrees
-        txidVersion === TXIDVersion.V2_PoseidonMerkle, // shouldTriggerV2TxidSync - only for live listener events on V2
-      );
+        await this.commitmentListener(
+          txidVersion,
+          chain,
+          commitmentEvents,
+          true, // shouldUpdateTrees
+          txidVersion === TXIDVersion.V2_PoseidonMerkle, // shouldTriggerV2TxidSync - only for live listener events on V2
+        );
         await this.decryptBalancesAllWallets(
           txidVersion,
           chain,
@@ -1736,8 +2003,8 @@ class RailgunEngine extends EventEmitter {
     const nullifierListener = async (txidVersion: TXIDVersion, nullifiers: Nullifier[]) => {
       const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
       if (!utxoMerkletree.isScanning) {
-      await this.nullifierListener(txidVersion, chain, nullifiers);
-      // Only start wallet balance decryption if utxoMerkletree is not already scanning
+        await this.nullifierListener(txidVersion, chain, nullifiers);
+        // Only start wallet balance decryption if utxoMerkletree is not already scanning
         await this.decryptBalancesAllWallets(
           txidVersion,
           chain,
@@ -1851,6 +2118,194 @@ class RailgunEngine extends EventEmitter {
     return path;
   }
 
+  private static getFinalizedScanCursorDBPrefix(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+    kind: RailgunFinalizedScanCursorKind,
+  ): string[] {
+    return [
+      DatabaseNamespace.ChainSyncInfo,
+      'finalized_scan_cursor',
+      txidVersion,
+      getChainFullNetworkID(chain),
+      kind,
+    ];
+  }
+
+  private static normalizeBlockHash(blockHash: string): string {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(blockHash)) {
+      throw new Error('Block hash must be a 32-byte 0x-prefixed hex string');
+    }
+    return blockHash.toLowerCase();
+  }
+
+  private static async getCanonicalBlockHash(
+    provider: RailgunBlockHashProvider,
+    blockNumber: number,
+  ): Promise<string> {
+    const block = await provider.getBlock(blockNumber);
+    if (!isDefined(block?.hash)) {
+      throw new Error(`Provider cannot resolve canonical block ${blockNumber}`);
+    }
+    return RailgunEngine.normalizeBlockHash(block.hash);
+  }
+
+  private static async assertCanonicalBlockHash(
+    provider: RailgunBlockHashProvider,
+    blockNumber: number,
+    expectedBlockHash: string,
+  ): Promise<void> {
+    const normalizedExpectedBlockHash = RailgunEngine.normalizeBlockHash(expectedBlockHash);
+    const canonicalBlockHash = await RailgunEngine.getCanonicalBlockHash(provider, blockNumber);
+    if (canonicalBlockHash !== normalizedExpectedBlockHash) {
+      throw new Error(`Canonical hash mismatch at block ${blockNumber}`);
+    }
+  }
+
+  private static async getBlockHashUnderFinalizedTarget(
+    provider: RailgunBlockHashProvider,
+    blockNumber: number,
+    targetBlock: number,
+    targetBlockHash: string,
+  ): Promise<string> {
+    await RailgunEngine.assertCanonicalBlockHash(provider, targetBlock, targetBlockHash);
+    const blockHash = await RailgunEngine.getCanonicalBlockHash(provider, blockNumber);
+    // Recheck after lookup so a concurrent reorg cannot pair old events with a new-fork hash.
+    await RailgunEngine.assertCanonicalBlockHash(provider, targetBlock, targetBlockHash);
+    return blockHash;
+  }
+
+  private async getFinalizedScanCursor(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+    kind: RailgunFinalizedScanCursorKind,
+  ): Promise<Optional<RailgunFinalizedScanCursor>> {
+    return this.db
+      .get(RailgunEngine.getFinalizedScanCursorDBPrefix(txidVersion, chain, kind), 'json')
+      .then((value: unknown) => {
+        if (!isDefined(value) || typeof value !== 'object' || Array.isArray(value)) {
+          return undefined;
+        }
+        const cursor = value as Partial<RailgunFinalizedScanCursor>;
+        if (
+          !Number.isSafeInteger(cursor.blockNumber) ||
+          !isDefined(cursor.blockNumber) ||
+          cursor.blockNumber < 0 ||
+          typeof cursor.blockHash !== 'string'
+        ) {
+          return undefined;
+        }
+        try {
+          return {
+            blockNumber: cursor.blockNumber,
+            blockHash: RailgunEngine.normalizeBlockHash(cursor.blockHash),
+          };
+        } catch {
+          return undefined;
+        }
+      })
+      .catch(() => Promise.resolve(undefined));
+  }
+
+  private async setFinalizedScanCursor(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+    kind: RailgunFinalizedScanCursorKind,
+    blockNumber: number,
+    blockHash: string,
+  ): Promise<void> {
+    if (!Number.isSafeInteger(blockNumber) || blockNumber < 0) {
+      throw new Error('Finalized scan cursor must be a non-negative safe integer');
+    }
+    const normalizedBlockHash = RailgunEngine.normalizeBlockHash(blockHash);
+    const existing = await this.getFinalizedScanCursor(txidVersion, chain, kind);
+    if (
+      isDefined(existing) &&
+      (existing.blockNumber > blockNumber ||
+        (existing.blockNumber === blockNumber && existing.blockHash === normalizedBlockHash))
+    ) {
+      return;
+    }
+    await this.db.put(
+      RailgunEngine.getFinalizedScanCursorDBPrefix(txidVersion, chain, kind),
+      { blockNumber, blockHash: normalizedBlockHash },
+      'json',
+    );
+  }
+
+  /** Returns independent commitment and nullifier coverage for one version and chain. */
+  async getFinalizedScanCursors(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+  ): Promise<RailgunFinalizedScanCursorState> {
+    const [commitmentCursor, nullifierCursor] = await Promise.all([
+      this.getFinalizedScanCursor(txidVersion, chain, 'commitments'),
+      this.getFinalizedScanCursor(txidVersion, chain, 'nullifiers'),
+    ]);
+    return {
+      commitmentsScannedThroughBlock: commitmentCursor?.blockNumber,
+      commitmentsScannedThroughBlockHash: commitmentCursor?.blockHash,
+      nullifiersScannedThroughBlock: nullifierCursor?.blockNumber,
+      nullifiersScannedThroughBlockHash: nullifierCursor?.blockHash,
+    };
+  }
+
+  private async clearFinalizedScanCursors(txidVersion: TXIDVersion, chain: Chain): Promise<void> {
+    await Promise.all([
+      this.db.clearNamespace(
+        RailgunEngine.getFinalizedScanCursorDBPrefix(txidVersion, chain, 'commitments'),
+      ),
+      this.db.clearNamespace(
+        RailgunEngine.getFinalizedScanCursorDBPrefix(txidVersion, chain, 'nullifiers'),
+      ),
+    ]);
+  }
+
+  private async getFinalizedScanStartBlock(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+    deploymentBlock: number,
+    getCanonicalBlockHash: (blockNumber: number) => Promise<string>,
+  ): Promise<number> {
+    const cursors = await this.getFinalizedScanCursors(txidVersion, chain);
+    const {
+      commitmentsScannedThroughBlock,
+      commitmentsScannedThroughBlockHash,
+      nullifiersScannedThroughBlock,
+      nullifiersScannedThroughBlockHash,
+    } = cursors;
+    // One missing lane means older optimized scans cannot prove full event coverage.
+    if (
+      !isDefined(commitmentsScannedThroughBlock) ||
+      !isDefined(commitmentsScannedThroughBlockHash) ||
+      !isDefined(nullifiersScannedThroughBlock) ||
+      !isDefined(nullifiersScannedThroughBlockHash)
+    ) {
+      return deploymentBlock;
+    }
+    try {
+      const [canonicalCommitmentBlockHash, canonicalNullifierBlockHash] = await Promise.all([
+        getCanonicalBlockHash(commitmentsScannedThroughBlock),
+        getCanonicalBlockHash(nullifiersScannedThroughBlock),
+      ]);
+      if (
+        RailgunEngine.normalizeBlockHash(canonicalCommitmentBlockHash) !==
+          commitmentsScannedThroughBlockHash ||
+        RailgunEngine.normalizeBlockHash(canonicalNullifierBlockHash) !==
+          nullifiersScannedThroughBlockHash
+      ) {
+        throw new Error('Finalized scan cursor is no longer canonical');
+      }
+    } catch {
+      await this.clearFinalizedScanCursors(txidVersion, chain);
+      return deploymentBlock;
+    }
+    return Math.max(
+      deploymentBlock,
+      Math.min(commitmentsScannedThroughBlock, nullifiersScannedThroughBlock) + 1,
+    );
+  }
+
   /**
    * Sets last synced block to resume syncing on next load.
    * @param chain - chain type/id to store value for
@@ -1878,26 +2333,6 @@ class RailgunEngine extends EventEmitter {
       .get(RailgunEngine.getLastSyncedBlockDBPrefix(txidVersion, chain), 'utf8')
       .then((val: string) => parseInt(val, 10))
       .catch(() => Promise.resolve(undefined));
-  }
-
-  /** Confirms the durable slow-scan cursor covers the requested block and current provider view. */
-  private async getValidatedWalletScanCursor(
-    txidVersion: TXIDVersion,
-    chain: Chain,
-    minimumBlock: number,
-    providerBlock: number,
-  ): Promise<number> {
-    const cursor = await this.getLastSyncedBlock(txidVersion, chain);
-    if (!isDefined(cursor) || !Number.isSafeInteger(cursor)) {
-      throw new Error('Wallet balance scan has no valid durable cursor');
-    }
-    if (cursor < minimumBlock) {
-      throw new Error('Wallet balance scan cursor is below the minimum block');
-    }
-    if (cursor > providerBlock) {
-      throw new Error('Wallet balance scan cursor is ahead of the provider');
-    }
-    return cursor;
   }
 
   private static getUTXOMerkletreeHistoryVersionDBPrefix(chain?: Chain): string[] {
@@ -2056,36 +2491,6 @@ class RailgunEngine extends EventEmitter {
         },
         deferCompletionEvent,
       );
-    }
-  }
-
-  /** Makes balance decryption errors visible to callers that need a complete snapshot. */
-  private async assertWalletBalancesDecrypted(
-    txidVersion: TXIDVersion,
-    chain: Chain,
-    walletIdFilter: string[],
-  ): Promise<void> {
-    const requestedWalletIds = new Set(walletIdFilter);
-    const wallets = this.allWallets().filter((wallet) => requestedWalletIds.has(wallet.id));
-    if (wallets.length !== requestedWalletIds.size) {
-      throw new Error('Cannot prove balances for an unloaded wallet');
-    }
-
-    const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
-    const { tree: latestTree } = await utxoMerkletree.getLatestTreeAndIndex();
-    for (const wallet of wallets) {
-      // Wallet decryption catches internal errors, so verify its saved scan heights here.
-      // eslint-disable-next-line no-await-in-loop
-      const walletDetails = await wallet.getWalletDetails(txidVersion, chain);
-      const firstWalletTree = walletDetails.creationTree ?? 0;
-      for (let tree = firstWalletTree; tree <= latestTree; tree += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        const treeLength = await utxoMerkletree.getTreeLength(tree);
-        const walletScannedHeight = walletDetails.treeScannedHeights[tree] ?? 0;
-        if (walletScannedHeight < treeLength) {
-          throw new Error(`Wallet balance decryption is incomplete for tree ${tree}`);
-        }
-      }
     }
   }
 

@@ -10,6 +10,7 @@ import {
   EventsNullifierListener,
   EventsRailgunTransactionListenerV3,
   EventsUnshieldListener,
+  HistoricalEventsScanOptions,
 } from '../../models/event-types';
 import { ZERO_32_BYTE_VALUE, ZERO_ADDRESS } from '../../utils/constants';
 import { ContractStore } from '../contract-store';
@@ -83,6 +84,7 @@ export class RailgunVersionedSmartContracts {
     eventsUnshieldListener: EventsUnshieldListener,
     eventsRailgunTransactionsV3Listener: EventsRailgunTransactionListenerV3,
     setLastSyncedBlock: (lastSyncedBlock: number) => Promise<void>,
+    options: HistoricalEventsScanOptions = {},
   ) {
     switch (txidVersion) {
       case TXIDVersion.V2_PoseidonMerkle: {
@@ -95,6 +97,7 @@ export class RailgunVersionedSmartContracts {
           eventsNullifierListener,
           eventsUnshieldListener,
           setLastSyncedBlock,
+          options,
         );
       }
       case TXIDVersion.V3_PoseidonMerkle: {
@@ -111,6 +114,7 @@ export class RailgunVersionedSmartContracts {
           eventsUnshieldListener,
           eventsRailgunTransactionsV3Listener,
           setLastSyncedBlock,
+          options,
         );
       }
     }

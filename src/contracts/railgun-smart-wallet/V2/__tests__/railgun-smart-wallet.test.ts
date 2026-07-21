@@ -4,6 +4,7 @@ import chaiAsPromised from 'chai-as-promised';
 import { Contract, JsonRpcProvider, TransactionReceipt, Wallet } from 'ethers';
 import memdown from 'memdown';
 import { groth16 } from 'snarkjs';
+import sinon from 'sinon';
 import { abi as erc20Abi } from '../../../../test/test-erc20-abi.test';
 import { abi as erc721Abi } from '../../../../test/test-erc721-abi.test';
 import { config } from '../../../../test/config.test';
@@ -69,6 +70,7 @@ import { isDefined } from '../../../../utils/is-defined';
 import { TXIDVersion } from '../../../../models/poi-types';
 import { WalletBalanceBucket } from '../../../../models/txo-types';
 import { RailgunVersionedSmartContracts } from '../../railgun-versioned-smart-contracts';
+import { PoseidonMerkleAccumulatorContract } from '../../V3/poseidon-merkle-accumulator';
 
 chai.use(chaiAsPromised);
 const { expect } = chai;
@@ -95,6 +97,110 @@ const RANDOM = ByteUtils.randomHex(16);
 const VALUE = BigInt(10000) * DECIMALS_18;
 
 let testShield: (value?: bigint) => Promise<TransactionReceipt | null>;
+
+const emptyEventFilter = () => ({ fragment: { topicHash: '0x00' } });
+
+const createHistoricalScanContract = () => {
+  const scanAllEvents = sinon.stub().resolves([]);
+  const contract = {
+    chain: { type: ChainType.EVM, id: 1 },
+    txidVersion: TXIDVersion.V2_PoseidonMerkle,
+    contract: {
+      filters: {
+        Nullified: emptyEventFilter,
+        Transact: emptyEventFilter,
+        Unshield: emptyEventFilter,
+        Shield: emptyEventFilter,
+        Nullifiers: emptyEventFilter,
+        GeneratedCommitmentBatch: emptyEventFilter,
+        CommitmentBatch: emptyEventFilter,
+      },
+    },
+    scanAllEvents,
+  } as unknown as RailgunSmartWalletContract;
+  return { contract, scanAllEvents };
+};
+
+const scanFinalizedRange = async (
+  contract: RailgunSmartWalletContract,
+  startBlock: number,
+  targetBlock: number,
+  getNextStartBlockFromValidMerkletree: () => Promise<number>,
+  setLastSyncedBlock: (blockNumber: number) => Promise<void>,
+) =>
+  RailgunSmartWalletContract.prototype.getHistoricalEvents.call(
+    contract,
+    startBlock,
+    targetBlock,
+    getNextStartBlockFromValidMerkletree,
+    async () => {},
+    async () => {},
+    async () => {},
+    setLastSyncedBlock,
+    { strictSequential: true },
+  );
+
+describe('railgun-smart-wallet finalized scan', () => {
+  it('scans a one-block target inclusively', async () => {
+    const { contract, scanAllEvents } = createHistoricalScanContract();
+    const setLastSyncedBlock = sinon.stub().resolves();
+
+    await scanFinalizedRange(contract, 100, 100, async () => 100, setLastSyncedBlock);
+
+    expect(scanAllEvents.calledOnceWithExactly(100, 100)).to.equal(true);
+    expect(setLastSyncedBlock.calledOnceWithExactly(100)).to.equal(true);
+  });
+
+  it('does not use commitment-derived skips', async () => {
+    const { contract, scanAllEvents } = createHistoricalScanContract();
+    const getNextStartBlockFromValidMerkletree = sinon.stub().resolves(999_999);
+    const setLastSyncedBlock = sinon.stub().resolves();
+
+    await scanFinalizedRange(
+      contract,
+      100,
+      10_200,
+      getNextStartBlockFromValidMerkletree,
+      setLastSyncedBlock,
+    );
+
+    expect(scanAllEvents.args).to.deep.equal([
+      [100, 5_100],
+      [5_101, 10_101],
+      [10_102, 10_200],
+    ]);
+    expect(setLastSyncedBlock.args).to.deep.equal([[5_100], [10_101], [10_200]]);
+    expect(getNextStartBlockFromValidMerkletree.notCalled).to.equal(true);
+  });
+
+  it('applies the same inclusive no-skip rule to V3', async () => {
+    const scanAllUpdateV3Events = sinon.stub().resolves([]);
+    const getNextStartBlockFromValidMerkletree = sinon.stub().resolves(999_999);
+    const setLastSyncedBlock = sinon.stub().resolves();
+    const contract = {
+      chain: { type: ChainType.EVM, id: 1 },
+      txidVersion: TXIDVersion.V3_PoseidonMerkle,
+      scanAllUpdateV3Events,
+    } as unknown as PoseidonMerkleAccumulatorContract;
+
+    await PoseidonMerkleAccumulatorContract.prototype.getHistoricalEvents.call(
+      contract,
+      100,
+      100,
+      getNextStartBlockFromValidMerkletree,
+      async () => {},
+      async () => {},
+      async () => {},
+      async () => {},
+      setLastSyncedBlock,
+      { strictSequential: true },
+    );
+
+    expect(scanAllUpdateV3Events.calledOnceWithExactly(100, 100)).to.equal(true);
+    expect(setLastSyncedBlock.calledOnceWithExactly(100)).to.equal(true);
+    expect(getNextStartBlockFromValidMerkletree.notCalled).to.equal(true);
+  });
+});
 
 describe('railgun-smart-wallet', function runTests() {
   this.timeout(20000);
@@ -273,15 +379,14 @@ describe('railgun-smart-wallet', function runTests() {
     // Submit actual transaction so the tree has a spent note/nullifier at position 0.
     const initialTransactionBatch = new TransactionBatch(chain);
     initialTransactionBatch.addOutput(actualBroadcasterFeeOutput);
-    const { provedTransactions: txs_initial } =
-      await initialTransactionBatch.generateTransactions(
-        engine.prover,
-        wallet,
-        txidVersion,
-        testEncryptionKey,
-        () => {},
-        true, // shouldGeneratePreTransactionPOIs
-      );
+    const { provedTransactions: txs_initial } = await initialTransactionBatch.generateTransactions(
+      engine.prover,
+      wallet,
+      txidVersion,
+      testEncryptionKey,
+      () => {},
+      true, // shouldGeneratePreTransactionPOIs
+    );
     const tx_initial = await RailgunVersionedSmartContracts.generateTransact(
       txidVersion,
       chain,
@@ -335,7 +440,9 @@ describe('railgun-smart-wallet', function runTests() {
       txs_DummyNullBroadcasterFee,
     );
     tx_DummyNullBroadcasterFee.from = '0x000000000000000000000000000000000000dEaD';
-    const gasEstimate_DummyNullBroadcasterFee = await provider.estimateGas(tx_DummyNullBroadcasterFee);
+    const gasEstimate_DummyNullBroadcasterFee = await provider.estimateGas(
+      tx_DummyNullBroadcasterFee,
+    );
 
     // This should be around 1.32M gas.
     // This will vary slightly based on small changes to the contract.
@@ -378,7 +485,9 @@ describe('railgun-smart-wallet', function runTests() {
       txs_DummyActualBroadcasterFee,
     );
     tx_DummyActualBroadcasterFee.from = '0x000000000000000000000000000000000000dEaD';
-    const gasEstimate_DummyActualBroadcasterFee = await provider.estimateGas(tx_DummyActualBroadcasterFee);
+    const gasEstimate_DummyActualBroadcasterFee = await provider.estimateGas(
+      tx_DummyActualBroadcasterFee,
+    );
     // This should be around 1.39M (1.44M V3) gas.
     // This will vary slightly based on small changes to the contract.
     expect(Number(gasEstimate_DummyActualBroadcasterFee)).to.be.greaterThan(
@@ -599,15 +708,14 @@ describe('railgun-smart-wallet', function runTests() {
       value: 100n,
       tokenData,
     });
-    const { provedTransactions: serializedTxs } =
-      await transactionBatch.generateTransactions(
-        engine.prover,
-        wallet,
-        txidVersion,
-        testEncryptionKey,
-        () => {},
-        false, // shouldGeneratePreTransactionPOIs
-      );
+    const { provedTransactions: serializedTxs } = await transactionBatch.generateTransactions(
+      engine.prover,
+      wallet,
+      txidVersion,
+      testEncryptionKey,
+      () => {},
+      false, // shouldGeneratePreTransactionPOIs
+    );
     const transact = await RailgunVersionedSmartContracts.generateTransact(
       txidVersion,
       chain,

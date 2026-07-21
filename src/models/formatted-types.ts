@@ -331,6 +331,11 @@ export type Nullifier = {
   blockNumber: number;
 };
 
+export type NullifierSpendMetadata = {
+  txid: string;
+  blockNumber: Optional<number>;
+};
+
 // !! DO NOT MODIFY THIS TYPE - IT IS STORED IN DB WITH THESE EXACT KEYS !!
 export type StoredReceiveCommitment = {
   txidVersion: TXIDVersion;
@@ -394,4 +399,3 @@ export type RelayAdaptShieldNFTRecipient = {
   nftTokenData: NFTTokenData;
   recipientAddress: string;
 };
-

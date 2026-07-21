@@ -13,6 +13,9 @@ export type EventsCommitmentListener = (txidVersion: TXIDVersion, events: Commit
 export type EventsNullifierListener = (txidVersion: TXIDVersion, nullifiers: Nullifier[]) => Promise<void>;
 export type EventsUnshieldListener = (txidVersion: TXIDVersion, unshields: UnshieldStoredEvent[]) => Promise<void>;
 export type EventsRailgunTransactionListenerV3 = (txidVersion: TXIDVersion, railgunTransaction: RailgunTransactionV3[]) => Promise<void>;
+export type HistoricalEventsScanOptions = {
+    strictSequential?: boolean;
+};
 export type QuickSyncRailgunTransactionsV2 = (chain: Chain, latestGraphID: Optional<string>) => Promise<RailgunTransactionV2[]>;
 export type GetLatestValidatedRailgunTxid = (txidVersion: TXIDVersion, chain: Chain) => Promise<{
     txidIndex: Optional<number>;

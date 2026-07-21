@@ -4,7 +4,7 @@ import EventEmitter from 'events';
 import { Chain } from '../../../models/engine-types';
 import { PollingJsonRpcProvider } from '../../../provider/polling-json-rpc-provider';
 import { PoseidonMerkleAccumulator } from '../../../abi/typechain/PoseidonMerkleAccumulator';
-import { EventsCommitmentListener, EventsNullifierListener, EventsRailgunTransactionListenerV3, EventsUnshieldListener } from '../../../models/event-types';
+import { EventsCommitmentListener, EventsNullifierListener, EventsRailgunTransactionListenerV3, EventsUnshieldListener, HistoricalEventsScanOptions } from '../../../models/event-types';
 import { TXIDVersion } from '../../../models/poi-types';
 export declare class PoseidonMerkleAccumulatorContract extends EventEmitter {
     readonly contract: PoseidonMerkleAccumulator;
@@ -32,7 +32,7 @@ export declare class PoseidonMerkleAccumulatorContract extends EventEmitter {
      * @param startBlock - block to scan from
      * @param latestBlock - block to scan to
      */
-    getHistoricalEvents(initialStartBlock: number, latestBlock: number, getNextStartBlockFromValidMerkletree: () => Promise<number>, eventsCommitmentListener: EventsCommitmentListener, eventsNullifierListener: EventsNullifierListener, eventsUnshieldListener: EventsUnshieldListener, eventsRailgunTransactionsV3Listener: EventsRailgunTransactionListenerV3, setLastSyncedBlock: (lastSyncedBlock: number) => Promise<void>): Promise<void>;
+    getHistoricalEvents(initialStartBlock: number, latestBlock: number, getNextStartBlockFromValidMerkletree: () => Promise<number>, eventsCommitmentListener: EventsCommitmentListener, eventsNullifierListener: EventsNullifierListener, eventsUnshieldListener: EventsUnshieldListener, eventsRailgunTransactionsV3Listener: EventsRailgunTransactionListenerV3, setLastSyncedBlock: (lastSyncedBlock: number) => Promise<void>, options?: HistoricalEventsScanOptions): Promise<void>;
     /**
      * Remove all listeners and shutdown contract instance
      */

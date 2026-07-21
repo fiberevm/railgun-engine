@@ -260,6 +260,10 @@ export type Nullifier = {
     txid: string;
     blockNumber: number;
 };
+export type NullifierSpendMetadata = {
+    txid: string;
+    blockNumber: Optional<number>;
+};
 export type StoredReceiveCommitment = {
     txidVersion: TXIDVersion;
     spendtxid: string | false;

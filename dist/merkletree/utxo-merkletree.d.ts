@@ -2,7 +2,7 @@ import { Database } from '../database/database';
 import { Chain } from '../models/engine-types';
 import { MerklerootValidator } from '../models/merkletree-types';
 import { Merkletree } from './merkletree';
-import { Commitment, Nullifier } from '../models/formatted-types';
+import { Commitment, Nullifier, NullifierSpendMetadata } from '../models/formatted-types';
 import { UnshieldStoredEvent } from '../models/event-types';
 import { TXIDVersion } from '../models';
 export declare class UTXOMerkletree extends Merkletree<Commitment> {
@@ -26,6 +26,10 @@ export declare class UTXOMerkletree extends Merkletree<Commitment> {
      * @returns database path
      */
     getNullifierDBPath(tree: number, nullifier: string): string[];
+    /** Stores spend height separately so existing nullifier txid records stay backward-compatible. */
+    getNullifierSpendBlockDBPath(tree: number, nullifier: string): string[];
+    private getNullifierBlockIndexDBPrefix;
+    private getNullifierBlockIndexDBPath;
     /**
      * Construct DB path from unshield transaction
      * @param txid - unshield txid to get path for
@@ -39,11 +43,17 @@ export declare class UTXOMerkletree extends Merkletree<Commitment> {
      * @returns Nullifier data, including txid of spent transaction
      */
     getNullifierTxid(nullifier: string, treeIndex?: number): Promise<Optional<string>>;
+    private getNullifierSpendMetadataForTree;
+    /** Gets spend identity and height, with a txid-only fallback for old databases. */
+    getNullifierSpendMetadata(nullifier: string, treeIndex?: number): Promise<Optional<NullifierSpendMetadata>>;
     /**
      * Adds nullifiers to database
      * @param nullifiers - nullifiers to add to db
      */
     nullify(nullifiers: Nullifier[]): Promise<void>;
+    private static parseNullifierBlockIndexKey;
+    /** Atomically replaces nullifiers in a canonical replay range before its cursor advances. */
+    reconcileNullifiers(startBlock: number, endBlock: number, canonicalNullifiers: Nullifier[], replaceAll: boolean): Promise<void>;
     /**
      * Adds unshield event to database
      * @param unshields - unshield events to add to db

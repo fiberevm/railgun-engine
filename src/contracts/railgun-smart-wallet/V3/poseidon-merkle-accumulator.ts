@@ -13,6 +13,7 @@ import {
   EventsNullifierListener,
   EventsRailgunTransactionListenerV3,
   EventsUnshieldListener,
+  HistoricalEventsScanOptions,
 } from '../../../models/event-types';
 import { TXIDVersion } from '../../../models/poi-types';
 import { V3Events } from './V3-events';
@@ -194,6 +195,7 @@ export class PoseidonMerkleAccumulatorContract extends EventEmitter {
     eventsUnshieldListener: EventsUnshieldListener,
     eventsRailgunTransactionsV3Listener: EventsRailgunTransactionListenerV3,
     setLastSyncedBlock: (lastSyncedBlock: number) => Promise<void>,
+    options: HistoricalEventsScanOptions = {},
   ) {
     let currentStartBlock = initialStartBlock;
 
@@ -205,7 +207,11 @@ export class PoseidonMerkleAccumulatorContract extends EventEmitter {
 
     let startBlockForNext10000 = initialStartBlock;
 
-    while (currentStartBlock < latestBlock) {
+    while (
+      options.strictSequential === true
+        ? currentStartBlock <= latestBlock
+        : currentStartBlock < latestBlock
+    ) {
       // Process chunks of blocks for all events, serially.
 
       if ((currentStartBlock - startBlockForNext10000) % 10000 === 0) {
@@ -233,6 +239,11 @@ export class PoseidonMerkleAccumulatorContract extends EventEmitter {
       await setLastSyncedBlock(endBlock);
 
       const nextStartBlockFromCurrentBlock = currentStartBlock + SCAN_CHUNKS + 1;
+      if (options.strictSequential === true) {
+        // Finalized scans must cover every block. Commitment state cannot prove nullifier coverage.
+        currentStartBlock = nextStartBlockFromCurrentBlock;
+        continue;
+      }
       const nextStartBlockFromLatestValidMerkletreeEntry =
         // eslint-disable-next-line no-await-in-loop
         await getNextStartBlockFromValidMerkletree();

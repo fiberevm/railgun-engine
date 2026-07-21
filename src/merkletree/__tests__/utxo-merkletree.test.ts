@@ -698,8 +698,39 @@ describe('utxo-merkletree', () => {
 
   it('Should store nullifiers', async () => {
     expect(await merkletree.getNullifierTxid('00')).to.equal(undefined);
-    await merkletree.nullify([{ nullifier: '00', treeNumber: 0, txid: '01', blockNumber: 0 }]);
+    await merkletree.nullify([{ nullifier: '00', treeNumber: 0, txid: '01', blockNumber: 123 }]);
     expect(await merkletree.getNullifierTxid('00')).to.equal('01');
+    expect(await merkletree.getNullifierSpendMetadata('00', 0)).to.deep.equal({
+      txid: '01',
+      blockNumber: 123,
+    });
+
+    // Existing databases only have txid; callers must not receive a made-up spend height.
+    await db.put(merkletree.getNullifierDBPath(0, '02'), '03');
+    expect(await merkletree.getNullifierSpendMetadata('02', 0)).to.deep.equal({
+      txid: '03',
+      blockNumber: undefined,
+    });
+    await merkletree.nullify([{ nullifier: '08', treeNumber: 0, txid: '09', blockNumber: 130 }]);
+
+    // Full canonical replay removes unknown legacy records but keeps indexed data after target.
+    await merkletree.reconcileNullifiers(
+      0,
+      123,
+      [{ nullifier: '00', treeNumber: 0, txid: '01', blockNumber: 123 }],
+      true,
+    );
+    expect(await merkletree.getNullifierTxid('02', 0)).to.equal(undefined);
+    expect(await merkletree.getNullifierTxid('08', 0)).to.equal('09');
+
+    await merkletree.nullify([
+      { nullifier: '04', treeNumber: 0, txid: '05', blockNumber: 124 },
+      { nullifier: '06', treeNumber: 0, txid: '07', blockNumber: 125 },
+    ]);
+    // Empty canonical logs remove stale spends only inside replayed range.
+    await merkletree.reconcileNullifiers(124, 124, [], false);
+    expect(await merkletree.getNullifierTxid('04', 0)).to.equal(undefined);
+    expect(await merkletree.getNullifierTxid('06', 0)).to.equal('07');
   }).timeout(1000);
 
   it('Should store and retrieve unshield events', async () => {

@@ -37,6 +37,10 @@ export type EventsRailgunTransactionListenerV3 = (
   railgunTransaction: RailgunTransactionV3[],
 ) => Promise<void>;
 
+export type HistoricalEventsScanOptions = {
+  strictSequential?: boolean;
+};
+
 export type QuickSyncRailgunTransactionsV2 = (
   chain: Chain,
   latestGraphID: Optional<string>,
@@ -100,4 +104,3 @@ export enum MerkletreeScanStatus {
   Complete = 'Complete',
   Incomplete = 'Incomplete',
 }
-
