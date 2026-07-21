@@ -470,6 +470,8 @@ export abstract class Merkletree<T extends MerkletreeLeaf> {
       this.releaseUpdatesLock();
       this.cachedNodeHashes = {};
       this.treeLengths = [];
+      this.writeQueue = [];
+      this.invalidMerklerootDetailsByTree = {};
     }
   }
 

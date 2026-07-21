@@ -643,16 +643,9 @@ class RailgunEngine extends EventEmitter {
       return;
     }
 
-    const utxoMerkletreeHistoryVersion = await this.getUTXOMerkletreeHistoryVersion(chain);
-    if (
-      !isDefined(utxoMerkletreeHistoryVersion) ||
-      utxoMerkletreeHistoryVersion < CURRENT_UTXO_MERKLETREE_HISTORY_VERSION
-    ) {
-      await this.clearUTXOMerkletreeAndLoadedWalletsAllTXIDVersions(chain);
-      await this.setUTXOMerkletreeHistoryVersion(chain, CURRENT_UTXO_MERKLETREE_HISTORY_VERSION);
-    }
-
     const utxoMerkletree = this.getUTXOMerkletree(txidVersion, chain);
+    const { finalizedTargetBlock, finalizedTargetBlockHash } = options;
+    const isFinalizedScan = isDefined(finalizedTargetBlock);
 
     if (utxoMerkletree.isScanning) {
       // Do not allow multiple simultaneous scans.
@@ -662,9 +655,37 @@ class RailgunEngine extends EventEmitter {
       EngineDebug.log('Already scanning. Stopping additional re-scan.');
       return;
     }
+
+    const reservedSiblingMerkletrees: UTXOMerkletree[] = [];
+    if (isFinalizedScan) {
+      this.utxoMerkletrees.forEach((siblingMerkletree, siblingTXIDVersion, siblingChain) => {
+        if (
+          siblingTXIDVersion !== txidVersion &&
+          siblingChain.type === chain.type &&
+          siblingChain.id === chain.id
+        ) {
+          reservedSiblingMerkletrees.push(siblingMerkletree);
+        }
+      });
+      if (reservedSiblingMerkletrees.some((siblingMerkletree) => siblingMerkletree.isScanning)) {
+        throw new Error('Cannot create finalized snapshot while another scan is running');
+      }
+      for (const siblingMerkletree of reservedSiblingMerkletrees) {
+        siblingMerkletree.isScanning = true;
+      }
+    }
     utxoMerkletree.isScanning = true;
 
     try {
+      const utxoMerkletreeHistoryVersion = await this.getUTXOMerkletreeHistoryVersion(chain);
+      if (
+        !isDefined(utxoMerkletreeHistoryVersion) ||
+        utxoMerkletreeHistoryVersion < CURRENT_UTXO_MERKLETREE_HISTORY_VERSION
+      ) {
+        await this.clearUTXOMerkletreeAndLoadedWalletsAllTXIDVersions(chain);
+        await this.setUTXOMerkletreeHistoryVersion(chain, CURRENT_UTXO_MERKLETREE_HISTORY_VERSION);
+      }
+
       this.emitUTXOMerkletreeScanUpdateEvent(txidVersion, chain, 0.03); // 3%
 
       const postQuickSyncProgress = 0.5;
@@ -675,8 +696,6 @@ class RailgunEngine extends EventEmitter {
         throw new Error('Requires RailgunSmartWalletContract with provider');
       }
       const providerLatestBlock = await provider.getBlockNumber();
-      const { finalizedTargetBlock, finalizedTargetBlockHash } = options;
-      const isFinalizedScan = isDefined(finalizedTargetBlock);
       if (isFinalizedScan && finalizedTargetBlock > providerLatestBlock) {
         throw new Error('Provider has not reached the finalized scan target');
       }
@@ -704,6 +723,7 @@ class RailgunEngine extends EventEmitter {
           chain,
           deploymentBlock,
           (blockNumber) => RailgunEngine.getCanonicalBlockHash(provider, blockNumber),
+          () => this.clearFinalizedScanStateForCanonicalReplay(txidVersion, chain),
         );
         replaceAllFinalizedNullifiers = startScanningBlockSlowScan === deploymentBlock;
       } else {
@@ -852,6 +872,9 @@ class RailgunEngine extends EventEmitter {
       }
     } finally {
       utxoMerkletree.isScanning = false;
+      for (const siblingMerkletree of reservedSiblingMerkletrees) {
+        siblingMerkletree.isScanning = false;
+      }
     }
   }
 
@@ -2261,11 +2284,26 @@ class RailgunEngine extends EventEmitter {
     ]);
   }
 
+  private async clearFinalizedScanStateForCanonicalReplay(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+  ): Promise<void> {
+    // Missing cursors mark an unfinished reset, so retries repeat every cleanup step.
+    await this.clearFinalizedScanCursors(txidVersion, chain);
+    await this.getUTXOMerkletree(txidVersion, chain).clearDataForMerkletree();
+    await this.clearSyncedUnshieldEvents(txidVersion, chain);
+    await this.db.clearNamespace(RailgunEngine.getLastSyncedBlockDBPrefix(txidVersion, chain));
+    await Promise.all(
+      this.allWallets().map((wallet) => wallet.clearDecryptedBalances(txidVersion, chain)),
+    );
+  }
+
   private async getFinalizedScanStartBlock(
     txidVersion: TXIDVersion,
     chain: Chain,
     deploymentBlock: number,
     getCanonicalBlockHash: (blockNumber: number) => Promise<string>,
+    clearStateForCanonicalReplay: () => Promise<void>,
   ): Promise<number> {
     const cursors = await this.getFinalizedScanCursors(txidVersion, chain);
     const {
@@ -2281,6 +2319,7 @@ class RailgunEngine extends EventEmitter {
       !isDefined(nullifiersScannedThroughBlock) ||
       !isDefined(nullifiersScannedThroughBlockHash)
     ) {
+      await clearStateForCanonicalReplay();
       return deploymentBlock;
     }
     try {
@@ -2297,7 +2336,7 @@ class RailgunEngine extends EventEmitter {
         throw new Error('Finalized scan cursor is no longer canonical');
       }
     } catch {
-      await this.clearFinalizedScanCursors(txidVersion, chain);
+      await clearStateForCanonicalReplay();
       return deploymentBlock;
     }
     return Math.max(

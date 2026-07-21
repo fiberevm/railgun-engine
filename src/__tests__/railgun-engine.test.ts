@@ -56,6 +56,11 @@ import { RelayAdaptVersionedSmartContracts } from '../contracts/relay-adapt/rela
 import { WalletBalanceBucket } from '../models/txo-types';
 import { XChaCha20 } from '../utils/encryption/x-cha-cha-20';
 import { deriveNodes } from '../key-derivation';
+import { Database } from '../database/database';
+import { ContractStore } from '../contracts/contract-store';
+import { RailgunSmartWalletContract } from '../contracts/railgun-smart-wallet/V2/railgun-smart-wallet';
+import { CURRENT_UTXO_MERKLETREE_HISTORY_VERSION } from '../utils/constants';
+import { UnshieldStoredEvent } from '../models/event-types';
 
 chai.use(chaiAsPromised);
 
@@ -1183,6 +1188,10 @@ describe('railgun-engine', function test() {
     const finalizedChain = { type: ChainType.EVM, id: 10012 };
     const commitmentBlockHash = `0x${'33'.repeat(32)}`;
     const nullifierBlockHash = `0x${'44'.repeat(32)}`;
+    let canonicalReplayResets = 0;
+    const clearStateForCanonicalReplay = async () => {
+      canonicalReplayResets += 1;
+    };
     // eslint-disable-next-line dot-notation
     await engine['setFinalizedScanCursor'](
       TXIDVersion.V2_PoseidonMerkle,
@@ -1199,8 +1208,10 @@ describe('railgun-engine', function test() {
       finalizedChain,
       24,
       async () => commitmentBlockHash,
+      clearStateForCanonicalReplay,
     );
     expect(startBlockWithMissingCursor).to.equal(24);
+    expect(canonicalReplayResets).to.equal(1);
 
     // eslint-disable-next-line dot-notation
     await engine['setFinalizedScanCursor'](
@@ -1217,8 +1228,10 @@ describe('railgun-engine', function test() {
       24,
       async (blockNumber: number) =>
         blockNumber === 500 ? commitmentBlockHash : nullifierBlockHash,
+      clearStateForCanonicalReplay,
     );
     expect(startBlockWithCompleteCursors).to.equal(101);
+    expect(canonicalReplayResets).to.equal(1);
 
     // A changed canonical hash invalidates both lanes and forces a full replay.
     // eslint-disable-next-line dot-notation
@@ -1227,8 +1240,242 @@ describe('railgun-engine', function test() {
       finalizedChain,
       24,
       async () => `0x${'55'.repeat(32)}`,
+      clearStateForCanonicalReplay,
     );
     expect(startBlockAfterReorg).to.equal(24);
+    expect(canonicalReplayResets).to.equal(2);
+  });
+
+  it('Should rebuild finalized state after a canonical cursor reorg', async () => {
+    const finalizedChain = { type: ChainType.EVM, id: 10014 };
+    const finalizedTXIDVersion = TXIDVersion.V2_PoseidonMerkle;
+    const siblingTXIDVersion = TXIDVersion.V3_PoseidonMerkle;
+    const deploymentBlock = 24;
+    const targetBlock = 30;
+    const staleBlockHash = `0x${'11'.repeat(32)}`;
+    const canonicalBlockHash = `0x${'22'.repeat(32)}`;
+    const staleTxid = `0x${'33'.repeat(32)}`;
+    const canonicalTxid = `0x${'44'.repeat(32)}`;
+    const staleUnshieldTxid = `0x${'55'.repeat(32)}`;
+    const walletId = 'finalized-reorg-wallet';
+    const canonicalDB = new Database(memdown());
+
+    const baseCommitment: LegacyGeneratedCommitment = {
+      commitmentType: CommitmentType.LegacyGeneratedCommitment,
+      hash: '66'.repeat(32),
+      txid: staleTxid,
+      timestamp: undefined,
+      preImage: {
+        npk: `0x${'77'.repeat(32)}`,
+        token: {
+          tokenType: TokenType.ERC20,
+          tokenAddress: `0x${'88'.repeat(32)}`,
+          tokenSubID: TOKEN_SUB_ID_NULL,
+        },
+        value: '01',
+      },
+      encryptedRandom: [`0x${'99'.repeat(32)}`, `0x${'aa'.repeat(16)}`],
+      blockNumber: targetBlock,
+      utxoTree: 0,
+      utxoIndex: 0,
+    };
+    const staleCommitment = baseCommitment;
+    const canonicalCommitment: LegacyGeneratedCommitment = {
+      ...baseCommitment,
+      hash: 'bb'.repeat(32),
+      txid: canonicalTxid,
+    };
+    const staleUnshield: UnshieldStoredEvent = {
+      txid: staleUnshieldTxid,
+      timestamp: undefined,
+      toAddress: `0x${'cc'.repeat(20)}`,
+      tokenType: TokenType.ERC20,
+      tokenAddress: `0x${'88'.repeat(32)}`,
+      tokenSubID: TOKEN_SUB_ID_NULL,
+      amount: '01',
+      fee: '00',
+      blockNumber: targetBlock,
+      eventLogIndex: 0,
+      railgunTxid: undefined,
+    };
+
+    const staleTree = await UTXOMerkletree.create(
+      engine.db,
+      finalizedChain,
+      finalizedTXIDVersion,
+      async () => true,
+    );
+    const canonicalTree = await UTXOMerkletree.create(
+      canonicalDB,
+      finalizedChain,
+      finalizedTXIDVersion,
+      async () => true,
+    );
+    const siblingTree = await UTXOMerkletree.create(
+      engine.db,
+      finalizedChain,
+      siblingTXIDVersion,
+      async () => true,
+    );
+
+    try {
+      await staleTree.queueLeaves(0, 0, [staleCommitment]);
+      await staleTree.updateTreesFromWriteQueue();
+      await staleTree.addUnshieldEvents([staleUnshield]);
+      expect(await staleTree.getAllUnshieldEventsForTxid(staleUnshieldTxid)).to.have.length(1);
+
+      await canonicalTree.queueLeaves(0, 0, [canonicalCommitment]);
+      await canonicalTree.updateTreesFromWriteQueue();
+      const canonicalRoot = await canonicalTree.getRoot(0);
+      await siblingTree.queueLeaves(0, 0, [staleCommitment]);
+      await siblingTree.updateTreesFromWriteQueue();
+      const siblingRoot = await siblingTree.getRoot(0);
+      staleTree.merklerootValidator = async (_version, _chain, _tree, _index, root) =>
+        root === canonicalRoot;
+
+      // eslint-disable-next-line dot-notation
+      engine['utxoMerkletrees'].set(finalizedTXIDVersion, finalizedChain, staleTree);
+      // eslint-disable-next-line dot-notation
+      engine['utxoMerkletrees'].set(siblingTXIDVersion, finalizedChain, siblingTree);
+      engine.deploymentBlocks.set(finalizedTXIDVersion, finalizedChain, deploymentBlock);
+      // eslint-disable-next-line dot-notation
+      await engine['setUTXOMerkletreeHistoryVersion'](
+        finalizedChain,
+        CURRENT_UTXO_MERKLETREE_HISTORY_VERSION,
+      );
+      // eslint-disable-next-line dot-notation
+      await engine['setFinalizedScanCursor'](
+        finalizedTXIDVersion,
+        finalizedChain,
+        'commitments',
+        targetBlock,
+        staleBlockHash,
+      );
+      // eslint-disable-next-line dot-notation
+      await engine['setFinalizedScanCursor'](
+        finalizedTXIDVersion,
+        finalizedChain,
+        'nullifiers',
+        targetBlock,
+        staleBlockHash,
+      );
+
+      let walletStateIsStale = true;
+      let walletClearCount = 0;
+      let walletDecryptCount = 0;
+      engine.wallets[walletId] = {
+        id: walletId,
+        clearDecryptedBalances: async (version: TXIDVersion, clearedChain: Chain) => {
+          expect(version).to.equal(finalizedTXIDVersion);
+          expect(clearedChain).to.deep.equal(finalizedChain);
+          walletStateIsStale = false;
+          walletClearCount += 1;
+        },
+        decryptBalances: async () => {
+          expect(walletStateIsStale).to.equal(false);
+          walletDecryptCount += 1;
+        },
+        getWalletDetails: async () => ({
+          treeScannedHeights: [1],
+          creationTree: 0,
+          creationTreeHeight: 0,
+        }),
+        invalidateCommitmentsCache: () => {},
+      } as unknown as RailgunWallet;
+
+      const providerForFinalizedScan = {
+        getBlockNumber: async () => targetBlock,
+        getBlock: async () => {
+          expect(siblingTree.isScanning).to.equal(true);
+          return { hash: canonicalBlockHash };
+        },
+      };
+      let historicalScanCount = 0;
+      const getHistoricalEvents: RailgunSmartWalletContract['getHistoricalEvents'] = async (
+        initialStartBlock,
+        latestBlock,
+        _getNextStartBlockFromValidMerkletree,
+        commitmentListener,
+        nullifierListener,
+        unshieldListener,
+        setLastSyncedBlock,
+        options,
+      ) => {
+        expect(initialStartBlock).to.equal(deploymentBlock);
+        expect(latestBlock).to.equal(targetBlock);
+        expect(options?.strictSequential).to.equal(true);
+        expect(siblingTree.isScanning).to.equal(true);
+        historicalScanCount += 1;
+        await commitmentListener(finalizedTXIDVersion, [
+          {
+            txid: canonicalTxid,
+            treeNumber: 0,
+            startPosition: 0,
+            commitments: [canonicalCommitment],
+            blockNumber: targetBlock,
+          },
+        ]);
+        await nullifierListener(finalizedTXIDVersion, []);
+        await unshieldListener(finalizedTXIDVersion, []);
+        await setLastSyncedBlock(targetBlock);
+      };
+      ContractStore.railgunSmartWalletContracts.set(null, finalizedChain, {
+        contract: { runner: { provider: providerForFinalizedScan } },
+        validateMerkleroot: async (_tree: number, root: string) => root === canonicalRoot,
+        getHistoricalEvents,
+      } as unknown as RailgunSmartWalletContract);
+
+      siblingTree.isScanning = true;
+      await expect(
+        engine.scanWalletBalancesThroughBlock(
+          finalizedTXIDVersion,
+          finalizedChain,
+          [walletId],
+          targetBlock,
+          canonicalBlockHash,
+        ),
+      ).to.be.rejectedWith('Cannot create finalized snapshot while another scan is running');
+      expect(staleTree.isScanning).to.equal(false);
+      siblingTree.isScanning = false;
+
+      const firstResult = await engine.scanWalletBalancesThroughBlock(
+        finalizedTXIDVersion,
+        finalizedChain,
+        [walletId],
+        targetBlock,
+        canonicalBlockHash,
+      );
+      expect(firstResult.scannedThroughBlock).to.equal(targetBlock);
+      expect((await staleTree.getCommitment(0, 0)).hash).to.equal(canonicalCommitment.hash);
+      expect(await staleTree.getRoot(0)).to.equal(canonicalRoot);
+      expect(await staleTree.getAllUnshieldEventsForTxid(staleUnshieldTxid)).to.deep.equal([]);
+      expect(await siblingTree.getRoot(0)).to.equal(siblingRoot);
+      expect(siblingTree.isScanning).to.equal(false);
+      expect(walletClearCount).to.equal(1);
+      expect(walletDecryptCount).to.equal(1);
+
+      const secondResult = await engine.scanWalletBalancesThroughBlock(
+        finalizedTXIDVersion,
+        finalizedChain,
+        [walletId],
+        targetBlock,
+        canonicalBlockHash,
+      );
+      expect(secondResult.scannedThroughBlock).to.equal(targetBlock);
+      expect(historicalScanCount).to.equal(1);
+      expect(walletClearCount).to.equal(1);
+      expect(walletDecryptCount).to.equal(2);
+      expect(await siblingTree.getRoot(0)).to.equal(siblingRoot);
+      expect(siblingTree.isScanning).to.equal(false);
+    } finally {
+      delete engine.wallets[walletId];
+      // eslint-disable-next-line dot-notation
+      engine['utxoMerkletrees'].del(finalizedTXIDVersion, finalizedChain);
+      // eslint-disable-next-line dot-notation
+      engine['utxoMerkletrees'].del(siblingTXIDVersion, finalizedChain);
+      ContractStore.railgunSmartWalletContracts.del(null, finalizedChain);
+      await canonicalDB.close();
+    }
   });
 
   it('Should reject malformed finalized cursor records', async () => {

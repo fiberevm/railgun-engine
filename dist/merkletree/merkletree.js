@@ -385,6 +385,8 @@ class Merkletree {
             this.releaseUpdatesLock();
             this.cachedNodeHashes = {};
             this.treeLengths = [];
+            this.writeQueue = [];
+            this.invalidMerklerootDetailsByTree = {};
         }
     }
     /**

@@ -225,6 +225,8 @@ declare abstract class AbstractWallet extends EventEmitter {
      * @param chain - chain type/id to clear
      */
     clearDecryptedBalancesAllTXIDVersions(chain: Chain): Promise<void>;
+    /** Clears balances for one TXID version without removing sibling-version data. */
+    clearDecryptedBalances(txidVersion: TXIDVersion, chain: Chain): Promise<void>;
     /**
      * Clears stored balances and re-decrypts fully.
      * @param chain - chain type/id to rescan
