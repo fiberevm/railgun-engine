@@ -13,7 +13,7 @@ import { ABIRelayAdapt } from '../../../abi/abi';
 import { TransactionReceiptLog } from '../../../models/formatted-types';
 import { getTokenDataERC20 } from '../../../note/note-util';
 import { ZERO_ADDRESS } from '../../../utils/constants';
-import { RelayAdaptHelper } from '../relay-adapt-helper';
+import { RelayAdaptHelper, type RelayAdaptActionData } from '../relay-adapt-helper';
 import EngineDebug from '../../../debugger/debugger';
 import { ShieldRequestStruct } from '../../../abi/typechain/RailgunSmartWallet';
 import { RelayAdapt } from '../../../abi/typechain/RelayAdapt';
@@ -228,6 +228,22 @@ export class RelayAdaptV2Contract {
     // Set default gas limit for cross-contract calls.
     populatedTransaction.gasLimit = minimumGasLimit;
 
+    return populatedTransaction;
+  }
+
+  async populateRelayWithActionData(
+    transactions: TransactionStructV2[],
+    actionData: RelayAdaptActionData,
+  ): Promise<ContractTransaction> {
+    const populatedTransaction = await this.populateRelay(
+      transactions,
+      actionData.random,
+      actionData.requireSuccess,
+      actionData.calls,
+      {},
+      actionData.minGasLimit,
+    );
+    populatedTransaction.gasLimit = actionData.minGasLimit + 150_000n;
     return populatedTransaction;
   }
 

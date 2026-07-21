@@ -1,5 +1,10 @@
 import chai from 'chai';
+import { Interface, JsonRpcProvider } from 'ethers';
 import memdown from 'memdown';
+import { ABIRelayAdapt } from '../../abi/abi';
+import { ContractStore } from '../../contracts/contract-store';
+import { RELAY_ADAPT_ACTION_MIN_GAS_LIMIT_V2 } from '../../contracts/relay-adapt/constants';
+import { RelayAdaptV2Contract } from '../../contracts/relay-adapt/V2/relay-adapt-v2';
 import { CommitmentType, LegacyGeneratedCommitment } from '../../models/formatted-types';
 import { Chain, ChainType } from '../../models/engine-types';
 import { TXIDVersion } from '../../models/poi-types';
@@ -28,6 +33,8 @@ const { expect } = chai;
 const chain: Chain = { type: ChainType.EVM, id: 1 };
 const txidVersion = TXIDVersion.V2_PoseidonMerkle;
 const tokenData = getTokenDataERC20('0x5FbDB2315678afecb367f032d93F642f64180aa3');
+const destinationAddress = '0x2222222222222222222222222222222222222222';
+const relayRandom = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd';
 const shieldLeaf: LegacyGeneratedCommitment = {
   commitmentType: CommitmentType.LegacyGeneratedCommitment,
   hash: '10c139398677d31020ddf97e0c73239710c956a52a7ea082a1e84815582bfb5f',
@@ -69,6 +76,122 @@ describe('transaction preparation', () => {
     await merkletree.queueLeaves(0, 0, [shieldLeaf]);
     await merkletree.updateTreesFromWriteQueue();
     await wallet.decryptBalances(txidVersion, chain, undefined, false);
+    ContractStore.relayAdaptV2Contracts.set(
+      null,
+      chain,
+      new RelayAdaptV2Contract(config.contracts.relayAdapt, new JsonRpcProvider(config.rpc)),
+    );
+  });
+
+  it('prepares and proves an exact require-success RelayAdapt action without rebuilding signed data', async () => {
+    const transactionBatch = new TransactionBatch(chain);
+    transactionBatch.addUnshieldData({
+      // RelayAdapt must receive the unshield before its bound calls can distribute it.
+      toAddress: config.contracts.relayAdapt,
+      value: BigInt(`0x${shieldLeaf.preImage.value}`),
+      tokenData,
+    });
+    const minimumAmount = BigInt(`0x${shieldLeaf.preImage.value}`) - 10n;
+    const relayInterface = new Interface(ABIRelayAdapt);
+    const transferData = (value: bigint) =>
+      relayInterface.encodeFunctionData('transfer', [
+        [
+          {
+            token: tokenData,
+            to: destinationAddress,
+            value,
+          },
+        ],
+      ]);
+    const actionData = {
+      random: relayRandom,
+      requireSuccess: true,
+      minGasLimit: RELAY_ADAPT_ACTION_MIN_GAS_LIMIT_V2,
+      calls: [
+        { to: config.contracts.relayAdapt, data: transferData(minimumAmount), value: 0n },
+        { to: config.contracts.relayAdapt, data: transferData(0n), value: 0n },
+      ],
+    };
+
+    let signCalls = 0;
+    const originalSign = wallet.sign.bind(wallet);
+    wallet.sign = async (...args) => {
+      signCalls += 1;
+      return originalSign(...args);
+    };
+
+    try {
+      const prepared = await transactionBatch.prepareTransactionsForIndependentRelayAdapt(
+        wallet,
+        txidVersion,
+        config.encryptionKey,
+        () => actionData,
+      );
+      expect(signCalls).to.equal(0);
+      expect(prepared.relayAdaptAddress).to.equal(config.contracts.relayAdapt);
+      expect(prepared.transactions).to.have.length(1);
+      expect(prepared.transactions[0].preparedTransaction.boundParams.adaptContract).to.equal(
+        config.contracts.relayAdapt,
+      );
+      expect(prepared.transactions[0].preparedTransaction.boundParams.adaptParams).to.equal(
+        prepared.transactions[0].adaptParams,
+      );
+
+      const prover = new Prover(testArtifactsGetter);
+      prover.proveRailgun = async (_version, inputs, progressCallback) => {
+        progressCallback(100);
+        return {
+          proof: prover.dummyProveRailgun(inputs.publicInputs),
+          publicInputs: inputs.publicInputs,
+        };
+      };
+      const proved = await transactionBatch.generateRelayAdaptTransactionFromPrepared(
+        prover,
+        wallet,
+        config.encryptionKey,
+        [prepared.transactions[0].preparedTransaction],
+        actionData,
+        () => {},
+      );
+      expect(signCalls).to.equal(1);
+      const decoded = relayInterface.decodeFunctionData(
+        'relay',
+        proved.relayTransaction.data,
+      );
+      expect(decoded[1].requireSuccess).to.equal(true);
+      expect(decoded[1].minGasLimit).to.equal(RELAY_ADAPT_ACTION_MIN_GAS_LIMIT_V2);
+      expect(decoded[1].calls).to.have.length(2);
+      expect(decoded[1].calls[0].to).to.equal(config.contracts.relayAdapt);
+      expect(decoded[1].calls[0].data).to.equal(transferData(minimumAmount));
+      expect(decoded[1].calls[1].data).to.equal(transferData(0n));
+
+      const tamperedAction = {
+        ...actionData,
+        calls: [
+          ...actionData.calls.slice(0, 1),
+          { ...actionData.calls[1], data: transferData(1n) },
+        ],
+      };
+      let tamperError: Error | undefined;
+      try {
+        await transactionBatch.generateRelayAdaptTransactionFromPrepared(
+          prover,
+          wallet,
+          config.encryptionKey,
+          [prepared.transactions[0].preparedTransaction],
+          tamperedAction,
+          () => {},
+        );
+      } catch (cause) {
+        tamperError = cause as Error;
+      }
+      expect(tamperError?.message).to.equal(
+        'Prepared transaction RelayAdapt parameters mismatch.',
+      );
+      expect(signCalls).to.equal(1);
+    } finally {
+      wallet.sign = originalSign;
+    }
   });
 
   it('captures exact V2 semantics before signing and proves the prepared request later', async () => {
@@ -256,6 +379,7 @@ describe('transaction preparation', () => {
 
   after(async () => {
     wallet.unloadUTXOMerkletree(txidVersion, chain);
+    ContractStore.relayAdaptV2Contracts.del(null, chain);
     await db.close();
   });
 });

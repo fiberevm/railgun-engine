@@ -111,6 +111,11 @@ class RelayAdaptV2Contract {
         populatedTransaction.gasLimit = minimumGasLimit;
         return populatedTransaction;
     }
+    async populateRelayWithActionData(transactions, actionData) {
+        const populatedTransaction = await this.populateRelay(transactions, actionData.random, actionData.requireSuccess, actionData.calls, {}, actionData.minGasLimit);
+        populatedTransaction.gasLimit = actionData.minGasLimit + 150000n;
+        return populatedTransaction;
+    }
     static getMinimumGasLimitForContract(minimumGasLimit) {
         // Contract call needs ~50,000-150,000 less gas than the gasLimit setting.
         // This can be more if there are complex UTXO sets for the unshield.

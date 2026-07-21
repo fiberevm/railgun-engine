@@ -1,4 +1,4 @@
-import { ContractTransaction, AbiCoder, keccak256 } from 'ethers';
+import { ContractTransaction, AbiCoder, BytesLike, keccak256 } from 'ethers';
 import { ByteUtils } from '../../utils/bytes';
 import { ShieldNoteERC20 } from '../../note/erc20/shield-note-erc20';
 import { AddressData, decodeAddress } from '../../key-derivation';
@@ -13,7 +13,43 @@ import { ERC721_NOTE_VALUE } from '../../note/note-util';
 import { RelayAdapt, ShieldRequestStruct } from '../../abi/typechain/RelayAdapt';
 import { TransactionStructV2, TransactionStructV3 } from '../../models/transaction-types';
 
+export type RelayAdaptActionData = {
+  random: string;
+  requireSuccess: boolean;
+  minGasLimit: bigint;
+  calls: Array<{
+    to: string;
+    data: string;
+    value: bigint;
+  }>;
+};
+
 class RelayAdaptHelper {
+  static getRelayAdaptParamsFromNullifiers(
+    nullifiers: BytesLike[][],
+    random: string,
+    requireSuccess: boolean,
+    calls: ContractTransaction[],
+    minGasLimit = 0n,
+  ): string {
+    const actionData = RelayAdaptHelper.getActionData(
+      random,
+      requireSuccess,
+      calls,
+      minGasLimit,
+    );
+    const preimage = AbiCoder.defaultAbiCoder().encode(
+      [
+        'bytes32[][] nullifiers',
+        'uint256 transactionsLength',
+        'tuple(bytes31 random, bool requireSuccess, uint256 minGasLimit, tuple(address to, bytes data, uint256 value)[] calls) actionData',
+      ],
+      [nullifiers, nullifiers.length, actionData],
+    );
+
+    return keccak256(ByteUtils.hexToBytes(preimage));
+  }
+
   static async generateRelayShieldRequests(
     random: string,
     shieldERC20Recipients: RelayAdaptShieldERC20Recipient[],
@@ -116,18 +152,13 @@ class RelayAdaptHelper {
     minGasLimit = BigInt(0),
   ): string {
     const nullifiers = transactions.map((transaction) => transaction.nullifiers);
-    const actionData = RelayAdaptHelper.getActionData(random, requireSuccess, calls, minGasLimit);
-
-    const preimage = AbiCoder.defaultAbiCoder().encode(
-      [
-        'bytes32[][] nullifiers',
-        'uint256 transactionsLength',
-        'tuple(bytes31 random, bool requireSuccess, uint256 minGasLimit, tuple(address to, bytes data, uint256 value)[] calls) actionData',
-      ],
-      [nullifiers, transactions.length, actionData],
+    return RelayAdaptHelper.getRelayAdaptParamsFromNullifiers(
+      nullifiers,
+      random,
+      requireSuccess,
+      calls,
+      minGasLimit,
     );
-
-    return keccak256(ByteUtils.hexToBytes(preimage));
   }
 
   /**

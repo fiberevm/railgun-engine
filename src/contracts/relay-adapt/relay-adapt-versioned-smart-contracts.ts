@@ -6,6 +6,7 @@ import { ShieldRequestStruct } from '../../abi/typechain/RelayAdapt';
 import { TransactionReceiptLog, TransactionStructV2, TransactionStructV3 } from '../../models';
 import { RelayAdaptV2Contract } from './V2/relay-adapt-v2';
 import { RelayAdaptV3Contract } from './V3/relay-adapt-v3';
+import type { RelayAdaptActionData } from './relay-adapt-helper';
 
 export class RelayAdaptVersionedSmartContracts {
   static getRelayAdaptContract(txidVersion: TXIDVersion, chain: Chain) {
@@ -98,6 +99,20 @@ export class RelayAdaptVersionedSmartContracts {
       }
     }
     throw new Error('Unsupported txidVersion');
+  }
+
+  static populateRelayWithActionData(
+    txidVersion: TXIDVersion,
+    chain: Chain,
+    transactions: TransactionStructV2[],
+    actionData: RelayAdaptActionData,
+  ): Promise<ContractTransaction> {
+    if (txidVersion !== TXIDVersion.V2_PoseidonMerkle) {
+      throw new Error('Prepared RelayAdapt transactions currently support only V2.');
+    }
+    return ContractStore.relayAdaptV2Contracts
+      .getOrThrow(null, chain)
+      .populateRelayWithActionData(transactions, actionData);
   }
 
   static getRelayAdaptParamsUnshieldBaseToken(
