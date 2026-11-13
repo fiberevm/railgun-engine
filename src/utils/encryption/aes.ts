@@ -10,6 +10,9 @@ const { createCipheriv, createDecipheriv } = isNodejs
   : // eslint-disable-next-line global-require, @typescript-eslint/no-var-requires
     (require('browserify-aes/browser') as Ciphers);
 
+/** A GCM ciphertext's iv, tag and blocks, parsed once. */
+export type PreparedGCM = { iv: Uint8Array; tag: Uint8Array; data: Uint8Array[] };
+
 export class AES {
   static getRandomIV() {
     return ByteUtils.randomHex(16);
@@ -110,6 +113,39 @@ export class AES {
     } catch (cause) {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       throw new Error('Unable to decrypt ciphertext.', { cause });
+    }
+  }
+
+  /**
+   * Parses a GCM ciphertext the way `decryptGCM` does, once, for trying several keys.
+   * Undefined when `decryptGCM` would reject it whatever the key.
+   */
+  static prepareGCM(ciphertext: Ciphertext): Optional<PreparedGCM> {
+    try {
+      const iv = ByteUtils.fastHexToBytes(ByteUtils.trim(ciphertext.iv, 16) as string);
+      const tag = ByteUtils.fastHexToBytes(ByteUtils.trim(ciphertext.tag, 16) as string);
+      if (iv.byteLength !== 16 || tag.byteLength !== 16) return undefined;
+      return { iv, tag, data: ciphertext.data.map((block) => ByteUtils.fastHexToBytes(block)) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Whether `decryptGCM` would succeed with this key, without building its plaintext or its
+   * error. A wallet scan tries the wrong key on almost every leaf, and a thrown error with a
+   * cause costs several times the decryption itself.
+   */
+  static gcmOpens(prepared: PreparedGCM, key: Uint8Array): boolean {
+    if (key.byteLength !== 32) return false;
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', key, prepared.iv, { authTagLength: 16 });
+      decipher.setAuthTag(prepared.tag);
+      for (const block of prepared.data) decipher.update(block);
+      decipher.final();
+      return true;
+    } catch {
+      return false;
     }
   }
 
