@@ -16,6 +16,7 @@ const txo_types_1 = require("../models/txo-types");
 const memo_1 = require("../note/memo");
 const bytes_1 = require("../utils/bytes");
 const keys_utils_1 = require("../utils/keys-utils");
+const fast_scan_1 = require("../utils/fast-scan");
 const wallet_types_1 = require("../models/wallet-types");
 const babyjubjub_1 = require("../key-derivation/babyjubjub");
 const chain_1 = require("../chain/chain");
@@ -486,11 +487,14 @@ class AbstractWallet extends events_1.default {
     async scanLeaves(txidVersion, leaves, tree, chain, startScanHeight, scanTicker) {
         debugger_1.default.log(`wallet:scanLeaves tree:${tree} chain:${chain.type}:${chain.id} leaves:${leaves.length}, startScanHeight:${startScanHeight}`);
         const vpk = this.getViewingKeyPair().privateKey;
+        // Rules out leaves that can't be this wallet's before the full decryption below.
+        const prefilter = await fast_scan_1.LeafPrefilter.create(vpk);
+        const mightBeMine = prefilter ? await prefilter.mightBeMine(leaves) : undefined;
         const leafSyncPromises = [];
         for (let i = 0; i < leaves.length; i += 1) {
             const leaf = leaves[i];
             const position = startScanHeight + i;
-            if (leaf == null) {
+            if (leaf == null || (mightBeMine && !mightBeMine[i])) {
                 if (scanTicker) {
                     scanTicker();
                 }

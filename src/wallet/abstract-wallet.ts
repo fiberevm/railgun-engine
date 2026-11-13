@@ -39,6 +39,7 @@ import {
 import { LEGACY_MEMO_METADATA_BYTE_CHUNKS } from '../note/memo';
 import { ByteLength, ByteUtils, fromUTF8String } from '../utils/bytes';
 import { generateNaiveRandomHex, getSharedSymmetricKey, signED25519 } from '../utils/keys-utils';
+import { LeafPrefilter } from '../utils/fast-scan';
 import {
   AddressKeys,
   TokenBalancesAllTxidVersions,
@@ -789,12 +790,16 @@ abstract class AbstractWallet extends EventEmitter {
     );
     const vpk = this.getViewingKeyPair().privateKey;
 
+    // Rules out leaves that can't be this wallet's before the full decryption below.
+    const prefilter = await LeafPrefilter.create(vpk);
+    const mightBeMine = prefilter ? await prefilter.mightBeMine(leaves) : undefined;
+
     const leafSyncPromises: Promise<ScannedDBCommitment[]>[] = [];
 
     for (let i = 0; i < leaves.length; i += 1) {
       const leaf = leaves[i];
       const position = startScanHeight + i;
-      if (leaf == null) {
+      if (leaf == null || (mightBeMine && !mightBeMine[i])) {
         if (scanTicker) {
           scanTicker();
         }

@@ -14,7 +14,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.verifyED25519 = exports.getPublicViewingKey = exports.convertTransactionStructToCommitmentSummary = exports.toUTF8String = exports.fromUTF8String = exports.ByteUtils = exports.ByteLength = void 0;
+exports.warmFastScanPoints = exports.setFastScanEnabled = exports.verifyED25519 = exports.getPublicViewingKey = exports.convertTransactionStructToCommitmentSummary = exports.toUTF8String = exports.fromUTF8String = exports.ByteUtils = exports.ByteLength = void 0;
 // Note: we purposefully do not export everything, in order to reduce the number of public APIs
 var bytes_1 = require("./bytes");
 Object.defineProperty(exports, "ByteLength", { enumerable: true, get: function () { return bytes_1.ByteLength; } });
@@ -27,4 +27,7 @@ __exportStar(require("./ecies"), exports);
 var keys_utils_1 = require("./keys-utils");
 Object.defineProperty(exports, "getPublicViewingKey", { enumerable: true, get: function () { return keys_utils_1.getPublicViewingKey; } });
 Object.defineProperty(exports, "verifyED25519", { enumerable: true, get: function () { return keys_utils_1.verifyED25519; } });
+var fast_scan_1 = require("./fast-scan");
+Object.defineProperty(exports, "setFastScanEnabled", { enumerable: true, get: function () { return fast_scan_1.setFastScanEnabled; } });
+Object.defineProperty(exports, "warmFastScanPoints", { enumerable: true, get: function () { return fast_scan_1.warmFastScanPoints; } });
 //# sourceMappingURL=index.js.map

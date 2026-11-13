@@ -89,6 +89,42 @@ class AES {
         }
     }
     /**
+     * Parses a GCM ciphertext the way `decryptGCM` does, once, for trying several keys.
+     * Undefined when `decryptGCM` would reject it whatever the key.
+     */
+    static prepareGCM(ciphertext) {
+        try {
+            const iv = bytes_1.ByteUtils.fastHexToBytes(bytes_1.ByteUtils.trim(ciphertext.iv, 16));
+            const tag = bytes_1.ByteUtils.fastHexToBytes(bytes_1.ByteUtils.trim(ciphertext.tag, 16));
+            if (iv.byteLength !== 16 || tag.byteLength !== 16)
+                return undefined;
+            return { iv, tag, data: ciphertext.data.map((block) => bytes_1.ByteUtils.fastHexToBytes(block)) };
+        }
+        catch {
+            return undefined;
+        }
+    }
+    /**
+     * Whether `decryptGCM` would succeed with this key, without building its plaintext or its
+     * error. A wallet scan tries the wrong key on almost every leaf, and a thrown error with a
+     * cause costs several times the decryption itself.
+     */
+    static gcmOpens(prepared, key) {
+        if (key.byteLength !== 32)
+            return false;
+        try {
+            const decipher = createDecipheriv('aes-256-gcm', key, prepared.iv, { authTagLength: 16 });
+            decipher.setAuthTag(prepared.tag);
+            for (const block of prepared.data)
+                decipher.update(block);
+            decipher.final();
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
+    /**
      * Encrypt blocks of data with AES-256-CTR
      * @param plaintext - plaintext to encrypt
      * @param key - key to encrypt with
