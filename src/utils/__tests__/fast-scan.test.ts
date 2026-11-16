@@ -20,8 +20,14 @@ import {
   isTorsionFreePoint,
   LeafPrefilter,
   setFastScanEnabled,
+  setFastScanPoolEnabled,
 } from '../fast-scan';
-import { getNoteBlindingKeys, getSharedSymmetricKey } from '../keys-utils';
+import { getScanPool } from '../fast-scan-pool';
+import {
+  getNoteBlindingKeys,
+  getSharedSymmetricKey,
+  getPrivateScalarFromPrivateKey,
+} from '../keys-utils';
 
 const txidVersion = TXIDVersion.V2_PoseidonMerkle;
 const chain: Chain = { type: ChainType.EVM, id: 8453 };
@@ -297,5 +303,66 @@ describe('fast-scan', function run() {
     expect(isTorsionFreePoint(Point.BASE.toRawBytes())).to.equal(true);
     expect(isTorsionFreePoint(Point.BASE.multiply(123456789n).toRawBytes())).to.equal(true);
     expect(isTorsionFreePoint(Point.fromHex(TORSION_POINT).toRawBytes())).to.equal(false);
+  });
+
+  it('derives exactly the engine shared key with libsodium', async () => {
+    for (let i = 0; i < 64; i += 1) {
+      const viewingKey = ByteUtils.hexToBytes(ByteUtils.randomHex(32));
+      // eslint-disable-next-line no-await-in-loop
+      const prefilter = await LeafPrefilter.create(viewingKey);
+      const point = Point.BASE.multiply(
+        ByteUtils.hexToBigInt(ByteUtils.randomHex(31)) + 1n,
+      ).toRawBytes();
+      // eslint-disable-next-line no-await-in-loop, @typescript-eslint/no-explicit-any
+      const fast = await (prefilter as any).sharedKey(point, new Uint8Array(32));
+      // eslint-disable-next-line no-await-in-loop
+      const engine = await getSharedSymmetricKey(viewingKey, point);
+      expect(ByteUtils.hexlify(fast)).to.equal(ByteUtils.hexlify(engine as Uint8Array));
+    }
+    // The engine scalar is reduced mod l; check it fits libsodium's 255-bit noclamp input.
+    const scalar = await getPrivateScalarFromPrivateKey(ByteUtils.hexToBytes(ByteUtils.randomHex(32)));
+    expect(scalar < 2n ** 253n).to.equal(true);
+  });
+
+  it('flags the same leaves through the worker pool as inline, in a large batch', async () => {
+    const scanPool = getScanPool();
+    expect(scanPool).to.not.equal(undefined);
+    const jobsBefore = scanPool?.jobsRun ?? 0;
+    const { fast, engine, leaves, wallets } = await scanBothWays(async ([alice, bob]) => {
+      const strangers = await Promise.all([createWallet(), createWallet(), createWallet()]);
+      const [s1, s2, s3] = strangers.map(({ wallet }) => wallet);
+      const noise = await Promise.all([
+        shieldLeaf(s1),
+        shieldLeaf(s2),
+        transferLeaf(s1, s2),
+        transferLeaf(s2, s3),
+        transferLeaf(s3, s1),
+      ]);
+      const out: Optional<Commitment>[] = [];
+      for (let i = 0; i < 400; i += 1) out.push(noise[i % noise.length]);
+      out[7] = await shieldLeaf(alice);
+      out[91] = await transferLeaf(alice, bob);
+      // Refused by libsodium in the worker; must come back and open through the engine.
+      out[133] = await transferLeaf(alice, bob, true);
+      out[150] = undefined;
+      return out;
+    }, 2);
+    // alice: her shield and her plain send (the torsioned note is encrypted to a key only
+    // bob's multiplication gives). bob: both receives.
+    expect(fast[0].length).to.equal(2);
+    expect(fast[1].length).to.equal(2);
+    expect(fast).to.deep.equal(engine);
+    // Both wallets' batches went through the pool.
+    expect((scanPool?.jobsRun ?? 0) - jobsBefore).to.be.greaterThan(1);
+
+    const prefilter = await LeafPrefilter.create(wallets[1].getViewingKeyPair().privateKey);
+    const pooled = await prefilter?.mightBeMine(leaves);
+    setFastScanPoolEnabled(false);
+    try {
+      expect(await prefilter?.mightBeMine(leaves)).to.deep.equal(pooled);
+    } finally {
+      setFastScanPoolEnabled(true);
+    }
+    expect(pooled?.filter(Boolean).length).to.equal(2);
   });
 });

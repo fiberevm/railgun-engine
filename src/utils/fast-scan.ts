@@ -2,49 +2,32 @@
  * A fast first pass over a wallet scan: which leaves could be addressed to this wallet?
  *
  * A cold wallet tries to decrypt every leaf in the tree. Nearly every attempt fails, and
- * each costs one or two curve25519 multiplications (the engine's WASM, ~110 µs) plus an
+ * each costs one or two curve25519 multiplications (the engine's WASM, ~100 µs) plus an
  * AES-GCM attempt that fails by throwing. This pass answers the same question faster, and
  * the scan then runs its usual, unchanged decryption on the leaves it flags:
  *
  * - Notes from one transaction share blinded keys, so each distinct point is multiplied once.
- * - Multiplications run in OpenSSL's X25519 (Node's `crypto`), ~6x faster than the WASM.
- *   X25519 multiplies by the clamped head of sha512(viewing key), which is the engine's
- *   scalar before its reduction mod l, so for a point in the prime-order subgroup the two
- *   agree. X25519 also clears a point's small-order component, which the engine's own
- *   multiplication keeps, so points that aren't torsion-free (only crafted ones are) go
- *   through the engine's multiplication instead. Torsion is a property of public chain
- *   data, so it is checked once per point per process and cached.
- * - X25519 works on Montgomery u, which drops the sign of Edwards x. Both encodings of the
- *   result are hashed into keys, and the AES-GCM tag accepts at most the right one.
- * - Field inversions for the Edwards/Montgomery conversions are batched: one per pass.
+ * - Multiplications run in libsodium (`sodium-native`), ~3x faster than the WASM:
+ *   `crypto_scalarmult_ed25519_noclamp` with the engine's own scalar computes exactly the
+ *   engine's product. libsodium refuses points that aren't canonical, have small order or
+ *   aren't in the prime-order subgroup; those (only crafted ones are) go through the
+ *   engine's multiplication instead, so its result stands for every point.
  * - A failed AES-GCM attempt returns false rather than throwing.
+ * - Large batches are split across a pool of worker threads (multiplications and AES-GCM
+ *   attempts both run there); small batches, and any batch the pool fails, run inline.
  *
  * The pass only ever flags too much, never too little: a leaf type it doesn't handle is
  * always flagged, and a flagged leaf that isn't the wallet's is rejected by the full scan.
- * It runs only where Node's crypto offers X25519; elsewhere scans run as before.
+ * It runs only where `sodium-native` loads (Node); elsewhere scans run as before.
  */
-import { CURVE, ExtendedPoint, Point } from '@noble/ed25519';
-import type { KeyObject } from 'crypto';
 import { Commitment, CommitmentType } from '../models/formatted-types';
-import { ByteUtils } from './bytes';
+import { ByteLength, ByteUtils } from './bytes';
 import { AES, PreparedGCM } from './encryption/aes';
-import { getSharedSymmetricKey } from './keys-utils';
-import { isNodejs, isReactNative } from './runtime';
+import { getScanPool, getSodium, PoolJob, ScanPool, Sodium } from './fast-scan-pool';
+import { getPrivateScalarFromPrivateKey, getSharedSymmetricKey } from './keys-utils';
 
-type NodeCrypto = Pick<
-  typeof import('crypto'),
-  'createHash' | 'createPrivateKey' | 'createPublicKey' | 'diffieHellman'
->;
-
-const P = 2n ** 255n - 19n;
-const Y_MASK = (1n << 255n) - 1n;
-// DER prefixes for raw X25519 keys (RFC 8410).
-const X25519_PKCS8_PREFIX = '302e020100300506032b656e04220420';
-const X25519_SPKI_PREFIX = '302a300506032b656e032100';
-// Points are public and few (thousands per chain); the bound only guards against misuse.
-const TORSION_CACHE_LIMIT = 1_000_000;
-
-const torsionFreeCache = new Map<string, boolean>();
+/** Attempts below which a batch runs inline: a round trip to the pool costs ~0.1-0.3 ms. */
+const MIN_POOL_ATTEMPTS = 256;
 
 let fastScanEnabled = true;
 
@@ -53,95 +36,22 @@ export const setFastScanEnabled = (enabled: boolean): void => {
   fastScanEnabled = enabled;
 };
 
-let nodeCrypto: Optional<NodeCrypto> | null = null;
+let poolEnabled = true;
 
-const getNodeCrypto = (): Optional<NodeCrypto> => {
-  if (nodeCrypto !== null) return nodeCrypto;
-  nodeCrypto = undefined;
-  if (!isNodejs || isReactNative || process.env.RAILGUN_DISABLE_FAST_SCAN === '1') {
-    return nodeCrypto;
-  }
-  try {
-    // eslint-disable-next-line global-require, @typescript-eslint/no-var-requires
-    const candidate = require('crypto') as NodeCrypto;
-    const probe = candidate.createPrivateKey({
-      key: Buffer.from(`${X25519_PKCS8_PREFIX}${'11'.repeat(32)}`, 'hex'),
-      format: 'der',
-      type: 'pkcs8',
-    });
-    if (probe.asymmetricKeyType === 'x25519') nodeCrypto = candidate;
-  } catch {
-    // No X25519 here (a browser shim, an old runtime): scans take the engine's path.
-  }
-  return nodeCrypto;
+/** Turns the worker pool off (or back on); batches then run on the calling thread. */
+export const setFastScanPoolEnabled = (enabled: boolean): void => {
+  poolEnabled = enabled;
 };
-
-const leToBigInt = (bytes: Uint8Array): bigint =>
-  BigInt(`0x${Buffer.from(bytes).reverse().toString('hex') || '0'}`);
-
-const bigIntToLe32 = (value: bigint): Buffer =>
-  Buffer.from(value.toString(16).padStart(64, '0'), 'hex').reverse();
 
 const HEX_POINT = /^[0-9a-f]{64}$/;
 
-const modPow = (base: bigint, exponent: bigint): bigint => {
-  let result = 1n;
-  let b = base % P;
-  let e = exponent;
-  while (e > 0n) {
-    if (e & 1n) result = (result * b) % P;
-    b = (b * b) % P;
-    e >>= 1n;
-  }
-  return result;
-};
-
-/** Inverts every (non-zero) value mod P with a single exponentiation. */
-const batchInvert = (values: bigint[]): bigint[] => {
-  const prefix = new Array<bigint>(values.length);
-  let product = 1n;
-  for (let i = 0; i < values.length; i += 1) {
-    prefix[i] = product;
-    product = (product * values[i]) % P;
-  }
-  let inverse = modPow(product, P - 2n);
-  const out = new Array<bigint>(values.length);
-  for (let i = values.length - 1; i >= 0; i -= 1) {
-    out[i] = (inverse * prefix[i]) % P;
-    inverse = (inverse * values[i]) % P;
-  }
-  return out;
-};
-
-const pointKey = (point: Uint8Array): string => Buffer.from(point).toString('hex');
-
 /**
- * Whether an encoded Edwards point is valid and has no small-order component. Invalid and
- * non-canonical encodings count as not torsion-free, so they take the engine's own path.
+ * Whether an encoded Edwards point is canonical, not of small order, and in the prime-order
+ * subgroup (libsodium's own test). False everywhere libsodium isn't available.
  */
-export const isTorsionFreePoint = (point: Uint8Array): boolean =>
-  isTorsionFreeKey(pointKey(point), point);
-
-const isTorsionFreeKey = (key: string, point: Uint8Array): boolean => {
-  const cached = torsionFreeCache.get(key);
-  if (cached !== undefined) return cached;
-  let torsionFree = false;
-  try {
-    if (point.length === 32) {
-      // [l]P = 0. Written as [l-1]P + P: some @noble/ed25519 1.7.x releases reject l itself
-      // as a scalar, so their own isTorsionFree always throws.
-      const extended = ExtendedPoint.fromAffine(Point.fromHex(point));
-      torsionFree = extended
-        .multiplyUnsafe(CURVE.l - 1n)
-        .add(extended)
-        .equals(ExtendedPoint.ZERO);
-    }
-  } catch {
-    torsionFree = false;
-  }
-  if (torsionFreeCache.size >= TORSION_CACHE_LIMIT) torsionFreeCache.clear();
-  torsionFreeCache.set(key, torsionFree);
-  return torsionFree;
+export const isTorsionFreePoint = (point: Uint8Array): boolean => {
+  const lib = getSodium();
+  return !!lib && point.length === 32 && lib.crypto_core_ed25519_is_valid_point(point);
 };
 
 type LeafCheck = {
@@ -149,14 +59,14 @@ type LeafCheck = {
   /** The point as lowercase hex without 0x, when it is exactly 32 bytes of hex. */
   key: Optional<string>;
   point: Uint8Array;
-  ciphertext: Optional<PreparedGCM>;
+  ciphertext: PreparedGCM;
 };
 
 const pointCheck = (
   leafIndex: number,
   hex: string,
   toBytes: (hex: string) => Uint8Array,
-  ciphertext: Optional<PreparedGCM>,
+  ciphertext: PreparedGCM,
 ): LeafCheck => {
   const stripped = ByteUtils.strip0x(hex).toLowerCase();
   if (HEX_POINT.test(stripped)) {
@@ -166,7 +76,10 @@ const pointCheck = (
   return { leafIndex, key: undefined, point: toBytes(hex), ciphertext };
 };
 
-/** The shared-key attempts the engine's decryption makes for one leaf, or undefined for any type it doesn't cover. */
+/**
+ * The shared-key attempts the engine's decryption makes for one leaf (none when no key can
+ * open its ciphertext), or undefined for any type it doesn't cover.
+ */
 const leafChecks = (leaf: Commitment, leafIndex: number): Optional<LeafCheck[]> => {
   switch (leaf.commitmentType) {
     case CommitmentType.TransactCommitmentV2: {
@@ -178,6 +91,7 @@ const leafChecks = (leaf: Commitment, leafIndex: number): Optional<LeafCheck[]> 
         ...noteCiphertext,
         data: [...noteCiphertext.data, ByteUtils.strip0x(ciphertext.memo)],
       });
+      if (!full) return [];
       return [ciphertext.blindedSenderViewingKey, ciphertext.blindedReceiverViewingKey].map(
         (blinded) => pointCheck(leafIndex, blinded, (hex) => ByteUtils.hexStringToBytes(hex), full),
       );
@@ -192,6 +106,7 @@ const leafChecks = (leaf: Commitment, leafIndex: number): Optional<LeafCheck[]> 
         tag: hexlified0.slice(32, 64),
         data: [hexlified1.slice(0, 32)],
       });
+      if (!random) return [];
       return [pointCheck(leafIndex, shieldKey, ByteUtils.hexToBytes, random)];
     }
     default:
@@ -199,159 +114,168 @@ const leafChecks = (leaf: Commitment, leafIndex: number): Optional<LeafCheck[]> 
   }
 };
 
+/** Groups checks into at most `count` jobs of whole points, balanced by attempt count. */
+const splitByPoint = (checks: LeafCheck[], count: number): LeafCheck[][][] => {
+  const byPoint = new Map<string, LeafCheck[]>();
+  for (const check of checks) {
+    const group = byPoint.get(check.key as string);
+    if (group) group.push(check);
+    else byPoint.set(check.key as string, [check]);
+  }
+  const perJob = Math.ceil(checks.length / count);
+  const jobs: LeafCheck[][][] = [];
+  let current: LeafCheck[][] = [];
+  let attempts = 0;
+  for (const group of byPoint.values()) {
+    current.push(group);
+    attempts += group.length;
+    if (attempts >= perJob) {
+      jobs.push(current);
+      current = [];
+      attempts = 0;
+    }
+  }
+  if (current.length) jobs.push(current);
+  return jobs;
+};
+
 /**
  * Flags the leaves a wallet's viewing key might own. Created per scan, from the wallet's
- * viewing private key; undefined where the runtime has no X25519.
+ * viewing private key; undefined where libsodium isn't available.
  */
 export class LeafPrefilter {
   private constructor(
-    private readonly crypto: NodeCrypto,
+    private readonly lib: Sodium,
     private readonly viewingPrivateKey: Uint8Array,
-    private readonly xPrivateKey: KeyObject,
+    /** The engine's scalar (sha512 head, clamped, mod l), little-endian. */
+    private readonly scalar: Uint8Array,
   ) {}
 
   static async create(viewingPrivateKey: Uint8Array): Promise<Optional<LeafPrefilter>> {
-    const crypto = getNodeCrypto();
-    if (!fastScanEnabled || !crypto || viewingPrivateKey.length !== 32) return undefined;
-    // getPrivateScalarFromPrivateKey hashes the same way, then clamps and reduces mod l;
-    // X25519 clamps the raw head itself.
-    const head = crypto.createHash('sha512').update(viewingPrivateKey).digest().subarray(0, 32);
-    const xPrivateKey = crypto.createPrivateKey({
-      key: Buffer.concat([Buffer.from(X25519_PKCS8_PREFIX, 'hex'), head]),
-      format: 'der',
-      type: 'pkcs8',
-    });
-    return new LeafPrefilter(crypto, viewingPrivateKey, xPrivateKey);
+    const lib = getSodium();
+    if (!fastScanEnabled || !lib || viewingPrivateKey.length !== 32) return undefined;
+    const scalar = await getPrivateScalarFromPrivateKey(viewingPrivateKey);
+    const scalarLE = ByteUtils.nToBytes(scalar, ByteLength.UINT_256).reverse();
+    return new LeafPrefilter(lib, viewingPrivateKey, scalarLE);
   }
 
   /** `flags[i]` is false only when leaf i certainly isn't this wallet's. */
   async mightBeMine(leaves: Optional<Commitment>[]): Promise<boolean[]> {
-    const flags = new Array<boolean>(leaves.length).fill(false);
-    const fastChecks: LeafCheck[] = [];
-    const engineChecks: LeafCheck[] = [];
+    const mine = new Set<number>();
+    const checks: LeafCheck[] = [];
     for (let i = 0; i < leaves.length; i += 1) {
       const leaf = leaves[i];
-      if (leaf == null) continue;
-      const checks = leafChecks(leaf, i);
-      if (!checks) {
-        flags[i] = true;
-        continue;
-      }
-      for (const check of checks) {
-        // A ciphertext no key opens can't make this leaf the wallet's.
-        if (!check.ciphertext) continue;
-        // y = 1 is the identity: 1 - y = 0 would poison the batched inversion. y >= P is a
-        // non-canonical encoding. Both, like anything not torsion-free, take the engine's path.
-        const y = check.key !== undefined ? leToBigInt(check.point) & Y_MASK : 0n;
-        if (
-          check.key !== undefined &&
-          y !== 1n &&
-          y < P &&
-          isTorsionFreeKey(check.key, check.point)
-        ) {
-          fastChecks.push(check);
-        } else {
-          engineChecks.push(check);
-        }
+      if (leaf != null) {
+        const forLeaf = leafChecks(leaf, i);
+        if (forLeaf) checks.push(...forLeaf);
+        else mine.add(i);
       }
     }
 
-    // The engine's own multiplication, for the rare points X25519 can't stand in for.
-    for (const check of engineChecks) {
-      if (flags[check.leafIndex]) continue;
-      // eslint-disable-next-line no-await-in-loop
-      const sharedKey = await getSharedSymmetricKey(this.viewingPrivateKey, check.point);
-      if (sharedKey && check.ciphertext && AES.gcmOpens(check.ciphertext, sharedKey)) {
-        flags[check.leafIndex] = true;
+    const scanPool =
+      poolEnabled && checks.length >= MIN_POOL_ATTEMPTS ? getScanPool() : undefined;
+    let pooled = false;
+    if (scanPool) {
+      try {
+        const opened = await this.openInPool(scanPool, checks);
+        opened.forEach((index) => mine.add(index));
+        pooled = true;
+      } catch {
+        // A worker failed: the whole batch runs inline below.
       }
     }
+    if (!pooled) {
+      const opened = await this.openInline(checks, mine);
+      opened.forEach((index) => mine.add(index));
+    }
+    return leaves.map((_, i) => mine.has(i));
+  }
 
-    const keysByPoint = this.sharedKeyCandidates(fastChecks);
-    for (const check of fastChecks) {
-      if (flags[check.leafIndex] || !check.ciphertext) continue;
-      const candidates = keysByPoint.get(check.key as string);
-      if (!candidates) {
-        // X25519 refused this point: fall back to the engine's multiplication.
+  /** Leaf indices whose ciphertext opens with the key from the leaf's point. */
+  private async openInline(checks: LeafCheck[], skip: Set<number>): Promise<Set<number>> {
+    const opened = new Set<number>();
+    const sharedKeys = new Map<string, Optional<Uint8Array>>();
+    const product = new Uint8Array(32);
+    for (const check of checks) {
+      if (skip.has(check.leafIndex) || opened.has(check.leafIndex)) continue;
+      let sharedKey: Optional<Uint8Array>;
+      if (check.key !== undefined && sharedKeys.has(check.key)) {
+        sharedKey = sharedKeys.get(check.key);
+      } else {
         // eslint-disable-next-line no-await-in-loop
-        const sharedKey = await getSharedSymmetricKey(this.viewingPrivateKey, check.point);
-        if (sharedKey && AES.gcmOpens(check.ciphertext, sharedKey)) flags[check.leafIndex] = true;
-        continue;
+        sharedKey = await this.sharedKey(check.point, product);
+        if (check.key !== undefined) sharedKeys.set(check.key, sharedKey);
       }
-      const { ciphertext } = check;
-      if (candidates.some((key) => AES.gcmOpens(ciphertext, key))) {
-        flags[check.leafIndex] = true;
-      }
+      if (sharedKey && AES.gcmOpens(check.ciphertext, sharedKey)) opened.add(check.leafIndex);
     }
-    return flags;
+    return opened;
   }
 
   /**
-   * For each distinct torsion-free point, the two keys `getSharedSymmetricKey` could give:
-   * sha256 of the product's encoding with either sign of x.
+   * openInline, with the distinct points (and the attempts that use them) split across the
+   * pool. Points libsodium refuses come back and are checked inline by the engine's
+   * multiplication, as are points that aren't plain 32-byte hex.
    */
-  private sharedKeyCandidates(checks: LeafCheck[]): Map<string, [Uint8Array, Uint8Array]> {
-    const distinct = new Map<string, bigint>();
-    for (const { key, point } of checks) {
-      if (key !== undefined && !distinct.has(key)) distinct.set(key, leToBigInt(point) & Y_MASK);
-    }
-    const keys = [...distinct.keys()];
-    const ys = [...distinct.values()];
-
-    // Edwards y -> Montgomery u = (1 + y) / (1 - y).
-    const inverseOneMinusY = batchInvert(ys.map((y) => (1n - y + P) % P));
-    const products = new Array<Optional<bigint>>(ys.length);
-    for (let i = 0; i < ys.length; i += 1) {
-      const u = ((1n + ys[i]) * inverseOneMinusY[i]) % P;
-      try {
-        const publicKey = this.crypto.createPublicKey({
-          key: Buffer.concat([Buffer.from(X25519_SPKI_PREFIX, 'hex'), bigIntToLe32(u)]),
-          format: 'der',
-          type: 'spki',
+  private async openInPool(scanPool: ScanPool, checks: LeafCheck[]): Promise<Set<number>> {
+    const inline = checks.filter((check) => check.key === undefined);
+    const jobs = splitByPoint(
+      checks.filter((check) => check.key !== undefined),
+      scanPool.size,
+    );
+    const results = await Promise.all(
+      jobs.map((groups) => {
+        const job: PoolJob = {
+          scalar: this.scalar,
+          points: new Uint8Array(groups.length * 32),
+          attempts: [],
+        };
+        groups.forEach((group, point) => {
+          job.points.set(group[0].point, point * 32);
+          for (const { ciphertext } of group) job.attempts.push({ point, ...ciphertext });
         });
-        products[i] = leToBigInt(
-          this.crypto.diffieHellman({ privateKey: this.xPrivateKey, publicKey }),
-        );
+        return scanPool.run(job);
+      }),
+    );
+
+    const opened = new Set<number>();
+    results.forEach(({ opens, refused }, jobIndex) => {
+      const groups = jobs[jobIndex];
+      let attempt = 0;
+      for (const group of groups) {
+        for (const check of group) {
+          if (opens[attempt]) opened.add(check.leafIndex);
+          attempt += 1;
+        }
+      }
+      for (const point of refused) inline.push(...groups[point]);
+    });
+    const openedInline = await this.openInline(inline, opened);
+    openedInline.forEach((index) => opened.add(index));
+    return opened;
+  }
+
+  /** The key `getSharedSymmetricKey` gives for this point: sha256 of [scalar]point. */
+  private async sharedKey(point: Uint8Array, product: Uint8Array): Promise<Optional<Uint8Array>> {
+    if (point.length === 32) {
+      try {
+        this.lib.crypto_scalarmult_ed25519_noclamp(product, this.scalar, point);
+        const key = new Uint8Array(32);
+        this.lib.crypto_hash_sha256(key, product);
+        return key;
       } catch {
-        // OpenSSL rejects an all-zero result; the caller falls back for this point.
-        products[i] = undefined;
+        // Refused (small order, torsion, non-canonical): the engine's multiplication decides.
       }
     }
-
-    // Montgomery u' -> Edwards y' = (u' - 1) / (u' + 1). u' = -1 has no Edwards image.
-    const usable = products.map((u) => u !== undefined && (u + 1n) % P !== 0n);
-    const inverseUPlusOne = batchInvert(
-      products.map((u, i) => (usable[i] ? ((u as bigint) + 1n) % P : 1n)),
-    );
-    const out = new Map<string, [Uint8Array, Uint8Array]>();
-    for (let i = 0; i < keys.length; i += 1) {
-      if (!usable[i]) continue;
-      const u = products[i] as bigint;
-      const y = (((u - 1n + P) % P) * inverseUPlusOne[i]) % P;
-      const even = bigIntToLe32(y);
-      const odd = Buffer.from(even);
-      odd[31] |= 0x80;
-      out.set(keys[i], [
-        new Uint8Array(this.crypto.createHash('sha256').update(even).digest()),
-        new Uint8Array(this.crypto.createHash('sha256').update(odd).digest()),
-      ]);
-    }
-    return out;
+    return getSharedSymmetricKey(this.viewingPrivateKey, point);
   }
 }
 
 /**
- * Runs the torsion check for every point in these leaves ahead of a scan, so the first
- * cold wallet after a restart doesn't pay for it. Safe to call repeatedly.
+ * Kept for callers of the previous fast pass, which cached a per-point torsion check.
+ * libsodium checks the subgroup inside each multiplication, so there is nothing to warm.
  */
-export const warmFastScanPoints = (leaves: Optional<Commitment>[]): void => {
-  for (let i = 0; i < leaves.length; i += 1) {
-    const leaf = leaves[i];
-    if (leaf == null) continue;
-    for (const check of leafChecks(leaf, i) ?? []) {
-      if (check.key !== undefined) isTorsionFreeKey(check.key, check.point);
-    }
-  }
-};
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const warmFastScanPoints = (_leaves: Optional<Commitment>[]): void => {};
 
-/** Test hook: forget cached torsion results. */
-export const clearFastScanCache = (): void => torsionFreeCache.clear();
+/** Kept for tests of the previous fast pass; there is no cache any more. */
+export const clearFastScanCache = (): void => {};

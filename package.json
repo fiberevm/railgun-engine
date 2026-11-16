@@ -102,5 +102,8 @@
     "@railgun-community/poseidon-hash-wasm": false,
     "crypto": false
   },
-  "packageManager": "yarn@1.22.22"
+  "packageManager": "yarn@1.22.22",
+  "optionalDependencies": {
+    "sodium-native": "4.3.3"
+  }
 }
